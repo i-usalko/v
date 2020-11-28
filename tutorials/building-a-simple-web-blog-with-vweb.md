@@ -95,7 +95,8 @@ As you can see, there are no routing rules. The `index()` action handles the `/`
 Vweb often uses convention over configuration and adding a new action requires
 no routing rules either:
 
-```v
+```v oksyntax
+import vweb
 fn (mut app App) time() vweb.Result {
 	app.vweb.text(time.now().format())
 	return vweb.Result{}
@@ -132,7 +133,7 @@ Let's return an HTML view instead. Create `index.html` in the same directory:
 
 and update our `index()` action so that it returns the HTML view we just created:
 
-```v
+```v ignore
 pub fn (mut app App) index() vweb.Result {
 	message := 'Hello, world from Vweb!'
 	return $vweb.html()
@@ -158,7 +159,8 @@ but V is a language with pure functions by default, and you won't be able
 to modify any data from a view. `<b>@foo.bar()</b>` will only work if the `bar()` method
 doesn't modify `foo`.
 
-The HTML template is compiled to V during the compilation of the website, that's done by the `$vweb.html()` line.
+The HTML template is compiled to V during the compilation of the website, 
+that's done by the `$vweb.html()` line.
 (`$` always means compile time actions in V.) offering the following benefits:
 
 - Great performance, since the templates don't need to be compiled
@@ -203,8 +205,9 @@ Run the file with `sqlite3 blog.db < blog.sqlite`.
 
 Add a SQLite handle to `App`:
 
-```v
+```v oksyntax
 import sqlite
+import vweb
 
 struct App {
 pub mut:
@@ -217,7 +220,7 @@ pub mut:
 
 Modify the `init_once()` method we created earlier to connect to a database:
 
-```v
+```v oksyntax
 pub fn (mut app App) init_once() {
 	db := sqlite.connect(':memory:') or { panic(err) }
 	db.exec('create table `Article` (id integer primary key, title text default "", text text default "")')
@@ -233,7 +236,7 @@ to have one DB connection for all requests.
 Create a new file `article.v`:
 
 
-```v
+```v oksyntax
 // article.v
 module main
 
@@ -252,7 +255,7 @@ pub fn (app &App) find_all_articles() []Article {
 
 Let's fetch the articles in the `index()` action:
 
-```v
+```v ignore
 pub fn (app &App) index() vweb.Result {
 	articles := app.find_all_articles()
 	return $vweb.html()
@@ -284,7 +287,7 @@ That was very simple, wasn't it?
 The built-in V ORM uses a syntax very similar to SQL. The queries are built with V.
 For example, if we only wanted to find articles with ids between 100 and 200, we'd do:
 
-```
+```v oksyntax
 return sql app.db {
 	select from Article where id >= 100 && id <= 200
 }
@@ -292,8 +295,7 @@ return sql app.db {
 
 Retrieving a single article is very simple:
 
-```v
-
+```v oksyntax
 pub fn (app &App) retrieve_article() ?Article {
 	return sql app.db {
 		select from Article limit 1
@@ -304,7 +306,7 @@ pub fn (app &App) retrieve_article() ?Article {
 V ORM uses V's optionals for single values, which is very useful, since
 bad queries will always be handled by the developer:
 
-```v
+```v oksyntax
 article := app.retrieve_article(10) or {
 	app.vweb.text('Article not found')
 	return
@@ -331,7 +333,8 @@ Create `new.html`:
 </html>
 ```
 
-```v
+```v oksyntax
+import vweb
 pub fn (mut app App) new_article() vweb.Result {
 	title := app.vweb.form['title']
 	text := app.vweb.form['text']
@@ -369,7 +372,8 @@ This tutorial used the traditional server-side rendering. If you prefer
 to render everything on the client or need an API, creating JSON endpoints
 in V is very simple:
 
-```v
+```v oksyntax
+import vweb
 pub fn (mut app App) articles() vweb.Result {
 	articles := app.find_all_articles()
 	app.vweb.json(json.encode(articles))

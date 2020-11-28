@@ -1,3 +1,6 @@
+// Copyright (c) 2020 Raúl Hernández. All rights reserved.
+// Use of this source code is governed by an MIT license
+// that can be found in the LICENSE file.
 module ui
 
 import os
@@ -51,9 +54,13 @@ fn restore_terminal_state() {
 	os.flush()
 }
 
-fn (mut ctx Context) termios_setup() {
+fn (mut ctx Context) termios_setup() ? {
 	// store the current title, so restore_terminal_state can get it back
 	ctx.save_title()
+
+	if !ctx.cfg.skip_init_checks && !(is_atty(C.STDIN_FILENO) != 0 && is_atty(C.STDOUT_FILENO) != 0) {
+		return error('not running under a TTY')
+	}
 
 	mut termios := get_termios()
 
@@ -75,15 +82,40 @@ fn (mut ctx Context) termios_setup() {
 		print('\x1b]0;$ctx.cfg.window_title\x07')
 	}
 
+	if !ctx.cfg.skip_init_checks {
+		// prevent blocking during the feature detections, but allow enough time for the terminal
+		// to send back the relevant input data
+		termios.c_cc[C.VTIME] = 1
+		termios.c_cc[C.VMIN] = 0
+		C.tcsetattr(C.STDIN_FILENO, C.TCSAFLUSH, &termios)
+		// feature-test the SU spec
+		sx, sy := get_cursor_position()
+		print('$bsu$esu')
+		ex, ey := get_cursor_position()
+		if sx == ex && sy == ey {
+			// the terminal either ignored or handled the sequence properly, enable SU
+			ctx.enable_su = true
+		} else {
+			ctx.draw_line(sx, sy, ex, ey)
+			ctx.set_cursor_position(sx, sy)
+			ctx.flush()
+		}
+		// feature-test rgb (truecolor) support
+		ctx.enable_rgb = supports_truecolor()
+	}
+
 	// Prevent stdin from blocking by making its read time 0
 	termios.c_cc[C.VTIME] = 0
 	termios.c_cc[C.VMIN] = 0
 	C.tcsetattr(C.STDIN_FILENO, C.TCSAFLUSH, &termios)
+	// enable mouse input
 	print('\x1b[?1003h\x1b[?1006h')
 	if ctx.cfg.use_alternate_buffer {
+		// switch to the alternate buffer
 		print('\x1b[?1049h')
+		// clear the terminal and set the cursor to the origin
+		print('\x1b[2J\x1b[3J\x1b[1;1H')
 	}
-	ctx.termios = termios
 	ctx.window_height, ctx.window_width = get_terminal_size()
 
 	// Reset console on exit
@@ -126,7 +158,36 @@ fn (mut ctx Context) termios_setup() {
 			c.event(event)
 		}
 	})
+
 	os.flush()
+}
+
+fn get_cursor_position() (int, int) {
+	print('\033[6n')
+	buf := malloc(25)
+	len := C.read(C.STDIN_FILENO, buf, 24)
+	unsafe { buf[len] = 0 }
+	s := tos(buf, len)
+	a := s[2..].split(';')
+	if a.len != 2 { return -1, -1 }
+	return a[0].int(), a[1].int()
+}
+
+fn supports_truecolor() bool {
+	// faster/simpler, but less reliable, check
+	if os.getenv('COLORTERM') in ['truecolor', '24bit'] {
+		return true
+	}
+	// set the bg color to some arbirtrary value (#010203), assumed not to be the default
+	print('\x1b[48:2:1:2:3m')
+	// andquery the current color
+	print('\x1bP\$qm\x1b\\')
+	buf := malloc(25)
+	len := C.read(C.STDIN_FILENO, buf, 24)
+	unsafe { buf[len] = 0 }
+	s := tos(buf, len)
+	return '1:2:3' in s
+
 }
 
 fn termios_reset() {
@@ -159,9 +220,11 @@ fn (mut ctx Context) termios_loop() {
 		if !ctx.paused {
 			sw.restart()
 			if ctx.cfg.event_fn != voidptr(0) {
-				len := C.read(C.STDIN_FILENO, ctx.read_buf.data, ctx.read_buf.cap - ctx.read_buf.len)
-				if len > 0 {
-					ctx.resize_arr(len)
+				unsafe {
+					len := C.read(C.STDIN_FILENO, ctx.read_buf.data + ctx.read_buf.len, ctx.read_buf.cap - ctx.read_buf.len)
+					ctx.resize_arr(ctx.read_buf.len + len)
+				}
+				if ctx.read_buf.len > 0 {
 					ctx.parse_events()
 				}
 			}

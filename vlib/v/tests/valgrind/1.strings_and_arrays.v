@@ -106,6 +106,12 @@ fn reassign_str() {
 	s = s + '!' // old s ref must be copied and freed after the assignment, since s is still used in the right expr
 }
 
+fn reassign_arr() {
+	mut x := [1, 2, 3]
+	// x must be freed before the re-assignment
+	x = [4, 5, 6]
+}
+
 fn match_expr() string {
 	x := 2
 	res := match x {
@@ -240,10 +246,33 @@ fn free_before_return_bool() bool {
 	return true
 }
 
+struct User {
+	name string
+	age  int
+}
+
+fn free_array_except_returned_element() {
+	user := get_user()
+	println(user)
+}
+
+fn get_user() User {
+	users := [User{'Peter', 25}, User{'Alice', 21}]
+	user := users[0] // has to be cloned, since `users` are going to be freed at the end of the function
+	return user
+}
+
+fn string_array_get() {
+	s := ['a', 'b', 'c']
+	x := s[0]
+	println(s)
+}
+
 fn main() {
 	println('start')
 	simple()
 	reassign_str()
+	reassign_arr()
 	str_tmp_expr()
 	str_tmp_expr_advanced()
 	str_tmp_expr_advanced_var_decl()
@@ -262,6 +291,7 @@ fn main() {
 	// free_before_return_bool()
 	// free_map()
 	// loop_map()
+	// free_array_except_returned_element()
 	println('end')
 }
 

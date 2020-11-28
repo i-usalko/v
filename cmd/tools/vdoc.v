@@ -16,6 +16,7 @@ import v.token
 import v.vmod
 import v.pref
 import json
+import io
 
 enum HighlightTokenTyp {
 	unone
@@ -154,7 +155,7 @@ fn (mut cfg DocConfig) serve_html() {
 	}
 	def_name := docs.keys()[0]
 	server_url := 'http://localhost:' + cfg.server_port.str()
-	server := net.listen(cfg.server_port) or {
+	server := net.listen_tcp(cfg.server_port) or {
 		panic(err)
 	}
 	println('Serving docs on: $server_url')
@@ -173,12 +174,12 @@ fn (mut cfg DocConfig) serve_html() {
 		default_filename: def_name
 	}
 	for {
-		mut con := server.accept() or {
+		mut conn := server.accept() or {
 			server.close() or { }
 			panic(err)
 		}
-		handle_http_connection(mut con, server_context)
-		con.close() or {
+		handle_http_connection(mut conn, server_context)
+		conn.close() or {
 			eprintln('error closing the connection: $err')
 		}
 	}
@@ -190,10 +191,9 @@ struct VdocHttpServerContext {
 	default_filename string
 }
 
-fn handle_http_connection(mut con net.Socket, ctx &VdocHttpServerContext) {
-	s := con.read_line()
-	first_line := s.all_before('\r\n')
-	if first_line.len == 0 {
+fn handle_http_connection(mut con net.TcpConn, ctx &VdocHttpServerContext) {
+	mut reader := io.new_buffered_reader(reader: io.make_reader(con))
+	first_line := reader.read_line() or {
 		send_http_response(mut con, 501, ctx.content_type, 'bad request')
 		return
 	}
@@ -211,7 +211,7 @@ fn handle_http_connection(mut con net.Socket, ctx &VdocHttpServerContext) {
 	send_http_response(mut con, 200, ctx.content_type, ctx.docs[filename])
 }
 
-fn send_http_response(mut con net.Socket, http_code int, content_type string, html string) {
+fn send_http_response(mut con net.TcpConn, http_code int, content_type string, html string) {
 	content_length := html.len.str()
 	shttp_code := http_code.str()
 	mut http_response := strings.new_builder(20000)
@@ -229,7 +229,7 @@ fn send_http_response(mut con net.Socket, http_code int, content_type string, ht
 	http_response.write('\r\n')
 	http_response.write(html)
 	sresponse := http_response.str()
-	con.send_string(sresponse) or {
+	con.write_str(sresponse) or {
 		eprintln('error sending http response: $err')
 	}
 }
@@ -525,38 +525,54 @@ fn (cfg DocConfig) gen_plaintext(idx int) string {
 	if dcs.head.comment.trim_space().len > 0 && !cfg.pub_only {
 		pw.writeln(dcs.head.comment.split_into_lines().map('    ' + it).join('\n'))
 	}
-	for _, cn in dcs.contents {
-		pw.writeln(cn.content)
-		if cn.comment.len > 0 && !cfg.pub_only {
-			pw.writeln(cn.comment.trim_space().split_into_lines().map('    ' + it).join('\n'))
-		}
-		if cfg.show_loc {
-			pw.writeln('Location: $cn.file_path:$cn.pos.line\n')
-		}
-	}
+	cfg.write_plaintext_content(dcs.contents.arr(), mut pw)
 	return pw.str()
+}
+
+fn (cfg DocConfig) write_plaintext_content(contents []doc.DocNode, mut pw strings.Builder) {
+	for cn in contents {
+		if cn.content.len > 0 {
+			pw.writeln(cn.content)
+			if cn.comment.len > 0 && !cfg.pub_only {
+				pw.writeln(cn.comment.trim_space().split_into_lines().map('    ' + it).join('\n'))
+			}
+			if cfg.show_loc {
+				pw.writeln('Location: $cn.file_path:$cn.pos.line\n')
+			}
+		}
+		cfg.write_plaintext_content(cn.children, mut pw)
+	}
 }
 
 fn (cfg DocConfig) gen_markdown(idx int, with_toc bool) string {
 	dcs := cfg.docs[idx]
 	mut hw := strings.new_builder(200)
 	mut cw := strings.new_builder(200)
-	hw.writeln('# $dcs.head.content\n$dcs.head.comment\n')
+	hw.writeln('# $dcs.head.content\n')
+	if dcs.head.comment.len > 0 {
+		hw.writeln('$dcs.head.comment\n')
+	}
 	if with_toc {
 		hw.writeln('## Contents')
 	}
-	for _, cn in dcs.contents {
-		name := cn.name.all_after(dcs.head.name + '.')
-		if with_toc {
-			hw.writeln('- [#$name](${slug(name)})')
-		}
-		cw.writeln('## $name')
-		cw.writeln('```v\n$cn.content\n```$cn.comment\n')
-		cw.writeln('[\[Return to contents\]](#Contents)\n')
-	}
+	cfg.write_markdown_content(dcs.contents.arr(), mut cw, mut hw, 0, with_toc)
 	footer_text := cfg.gen_footer_text(idx)
 	cw.writeln('#### $footer_text')
 	return hw.str() + '\n' + cw.str()
+}
+
+fn (cfg DocConfig) write_markdown_content(contents []doc.DocNode, mut cw strings.Builder, mut hw strings.Builder, indent int, with_toc bool) {
+	for cn in contents {
+		if with_toc && cn.name.len > 0 {
+			hw.writeln(' '.repeat(2 * indent) + '- [#$cn.name](${slug(cn.name)})')
+			cw.writeln('## $cn.name')
+		}
+		if cn.content.len > 0 {
+			cw.writeln('```v\n$cn.content\n```$cn.comment\n')
+			cw.writeln('[\[Return to contents\]](#Contents)\n')
+		}
+		cfg.write_markdown_content(cn.children, mut cw, mut hw, indent + 1, with_toc)
+	}
 }
 
 fn (cfg DocConfig) gen_footer_text(idx int) string {
@@ -1031,7 +1047,7 @@ fn main() {
 	}
 	is_path := cfg.input_path.ends_with('.v') || cfg.input_path.split(os.path_separator).len >
 		1 || cfg.input_path == '.'
-	if cfg.input_path == 'vlib' {
+	if cfg.input_path.trim_right('/') == 'vlib' {
 		cfg.is_vlib = true
 		cfg.is_multi = true
 		cfg.input_path = os.join_path(vexe_path, 'vlib')

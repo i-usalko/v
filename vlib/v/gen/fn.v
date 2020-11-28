@@ -60,9 +60,10 @@ fn (mut g Gen) gen_fn_decl(it ast.FnDecl, skip bool) {
 	}
 	mut type_name := g.typ(it.return_type)
 	if g.cur_generic_type != 0 {
-		// foo<T>() => foo_int(), foo_string() etc
+		// foo<T>() => foo_T_int(), foo_T_string() etc
 		gen_name := g.typ(g.cur_generic_type)
-		name += '_' + gen_name
+		// Using _T_ to differentiate between get<string> and get_string
+		name += '_T_' + gen_name
 	}
 	// if g.pref.show_cc && it.is_builtin {
 	// println(name)
@@ -100,8 +101,8 @@ fn (mut g Gen) gen_fn_decl(it ast.FnDecl, skip bool) {
 				// if !(g.pref.build_mode == .build_module && g.is_builtin_mod) {
 				// If we are building vlib/builtin, we need all private functions like array_get
 				// to be public, so that all V programs can access them.
-				g.write('static ')
-				g.definitions.write('static ')
+				g.write('VV_LOCAL_SYMBOL ')
+				g.definitions.write('VV_LOCAL_SYMBOL ')
 			}
 		}
 		fn_header := if msvc_attrs.len > 0 { '$type_name $msvc_attrs ${name}(' } else { '$type_name ${name}(' }
@@ -152,11 +153,6 @@ fn (mut g Gen) gen_fn_decl(it ast.FnDecl, skip bool) {
 	if it.return_type == table.void_type {
 		g.write_defer_stmts_when_needed()
 	}
-	//
-	if g.autofree && !g.pref.experimental {
-		// TODO: remove this, when g.write_autofree_stmts_when_needed works properly
-		g.autofree_scope_vars(it.body_pos.pos)
-	}
 	if it.return_type != table.void_type && it.stmts.len > 0 && it.stmts.last() !is ast.Return {
 		default_expr := g.type_default(it.return_type)
 		// TODO: perf?
@@ -175,7 +171,7 @@ fn (mut g Gen) gen_fn_decl(it ast.FnDecl, skip bool) {
 		if attr.name == 'export' {
 			g.writeln('// export alias: $attr.arg -> $name')
 			export_alias := '$type_name ${attr.arg}($arg_str)'
-			g.definitions.writeln('$export_alias;')
+			g.definitions.writeln('VV_EXPORTED_SYMBOL $export_alias; // exported fn $it.name')
 			g.writeln('$export_alias {')
 			g.write('\treturn ${name}(')
 			g.write(fargs.join(', '))
@@ -217,12 +213,6 @@ fn (mut g Gen) fn_args(args []table.Param, is_variadic bool) ([]string, []string
 		typ := g.unwrap_generic(arg.typ)
 		arg_type_sym := g.table.get_type_symbol(typ)
 		mut arg_type_name := g.typ(typ) // util.no_dots(arg_type_sym.name)
-		// if arg.name == 'xxx' {
-		// println('xxx arg type= ' + arg_type_name)
-		// }
-		if g.cur_generic_type != 0 {
-			// foo<T>() => foo_int(), foo_string() etc
-		}
 		is_varg := i == args.len - 1 && is_variadic
 		if is_varg {
 			varg_type_str := int(arg.typ).str()
@@ -378,7 +368,7 @@ fn (mut g Gen) method_call(node ast.CallExpr) {
 		}
 	}
 	if left_sym.kind == .sum_type && node.name == 'type_name' {
-		g.write('tos3( /* $left_sym.name */ v_typeof_sumtype_${node.receiver_type}( (')
+		g.write('tos3( /* $left_sym.name */ v_typeof_unionsumtype_${node.receiver_type}( (')
 		g.expr(node.left)
 		g.write(').typ ))')
 		return
@@ -414,7 +404,7 @@ fn (mut g Gen) method_call(node ast.CallExpr) {
 	mut is_range_slice := false
 	if node.receiver_type.is_ptr() && !node.left_type.is_ptr() {
 		if node.left is ast.IndexExpr {
-			idx := (node.left as ast.IndexExpr).index
+			idx := node.left.index
 			if idx is ast.RangeExpr {
 				// expr is arr[range].clone()
 				// use array_clone_static instead of array_clone
@@ -430,8 +420,7 @@ fn (mut g Gen) method_call(node ast.CallExpr) {
 	// g.write('/*${g.typ(node.receiver_type)}*/')
 	// g.write('/*expr_type=${g.typ(node.left_type)} rec type=${g.typ(node.receiver_type)}*/')
 	// }
-	if !node.receiver_type.is_ptr() && node.left_type.is_ptr() && node.name == 'str' &&
-		!g.should_write_asterisk_due_to_match_sumtype(node.left) {
+	if !node.receiver_type.is_ptr() && node.left_type.is_ptr() && node.name == 'str' {
 		g.write('ptr_str(')
 	} else {
 		g.write('${name}(')
@@ -546,8 +535,9 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 		name = c_name(name)
 	}
 	if node.generic_type != table.void_type && node.generic_type != 0 {
-		// `foo<int>()` => `foo_int()`
-		name += '_' + g.typ(node.generic_type)
+		// Using _T_ to differentiate between get<string> and get_string
+		// `foo<int>()` => `foo_T_int()`
+		name += '_T_' + g.typ(node.generic_type)
 	}
 	// TODO2
 	// cgen shouldn't modify ast nodes, this should be moved
@@ -560,9 +550,9 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 			g.checker_bug('print arg.typ is 0', node.pos)
 		}
 		mut sym := g.table.get_type_symbol(typ)
-		if sym.info is table.Alias as alias_info {
-			typ = alias_info.parent_type
-			sym = g.table.get_type_symbol(alias_info.parent_type)
+		if mut sym.info is table.Alias {
+			typ = sym.info.parent_type
+			sym = g.table.get_type_symbol(typ)
 		}
 		// check if alias parent also not a string
 		if typ != table.string_type {
@@ -650,12 +640,14 @@ fn (mut g Gen) autofree_call_pregen(node ast.CallExpr) {
 	// g.writeln('// autofree_call_pregen()')
 	// Create a temporary var before fn call for each argument in order to free it (only if it's a complex expression,
 	// like `foo(get_string())` or `foo(a + b)`
-	mut free_tmp_arg_vars := g.autofree && g.pref.experimental && !g.is_builtin_mod &&
-		node.args.len > 0 && !node.args[0].typ.has_flag(.optional) // TODO copy pasta checker.v
+	mut free_tmp_arg_vars := g.autofree && !g.is_builtin_mod && node.args.len > 0 && !node.args[0].typ.has_flag(.optional) // TODO copy pasta checker.v
 	if !free_tmp_arg_vars {
 		return
 	}
 	if g.is_js_call {
+		return
+	}
+	if g.inside_const {
 		return
 	}
 	free_tmp_arg_vars = false // set the flag to true only if we have at least one arg to free
@@ -676,7 +668,7 @@ fn (mut g Gen) autofree_call_pregen(node ast.CallExpr) {
 		if arg.expr is ast.CallExpr {
 			// Any argument can be an expression that has to be freed. Generate a tmp expression
 			// for each of those recursively.
-			g.autofree_call_pregen(arg.expr as ast.CallExpr)
+			g.autofree_call_pregen(arg.expr)
 		}
 		free_tmp_arg_vars = true
 		// t := g.new_tmp_var() + '_arg_expr_${name}_$i'
@@ -754,21 +746,20 @@ fn (mut g Gen) autofree_call_postgen(node_pos int) {
 				// // TODO why 0?
 				// continue
 				// }
-				v := *obj
-				is_optional := v.typ.has_flag(.optional)
+				is_optional := obj.typ.has_flag(.optional)
 				if is_optional {
 					// TODO: free optionals
 					continue
 				}
-				if !v.is_autofree_tmp {
+				if !obj.is_autofree_tmp {
 					continue
 				}
-				if v.is_used {
+				if obj.is_used {
 					// this means this tmp expr var has already been freed
 					continue
 				}
 				obj.is_used = true
-				g.autofree_variable(v)
+				g.autofree_variable(obj)
 				// g.nr_vars_to_free--
 			}
 			else {}
@@ -788,8 +779,8 @@ fn (mut g Gen) call_args(node ast.CallExpr) {
 		if gen_vargs && i == expected_types.len - 1 {
 			break
 		}
-		use_tmp_var_autofree := g.autofree && g.pref.experimental && arg.typ == table.string_type &&
-			arg.is_tmp_autofree
+		use_tmp_var_autofree := g.autofree && arg.typ == table.string_type && arg.is_tmp_autofree &&
+			!g.inside_const
 		// g.write('/* af=$arg.is_tmp_autofree */')
 		mut is_interface := false
 		// some c fn definitions dont have args (cfns.v) or are not updated in checker

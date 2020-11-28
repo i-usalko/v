@@ -247,10 +247,6 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 			node = p.index_expr(node)
 			p.is_stmt_ident = is_stmt_ident
 		} else if p.tok.kind == .key_as {
-			// sum type match `match x as alias` so return early
-			if p.inside_match {
-				return node
-			}
 			// sum type as cast `x := SumType as Variant`
 			pos := p.tok.position()
 			p.next()
@@ -353,7 +349,7 @@ fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 	p.next()
 	mut right := if op == .minus { p.expr(token.Precedence.call) } else { p.expr(token.Precedence.prefix) }
 	p.is_amp = false
-	if right is ast.CastExpr {
+	if mut right is ast.CastExpr {
 		right.in_prexpr = true
 	}
 	mut or_stmts := []ast.Stmt{}

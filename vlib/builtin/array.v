@@ -389,7 +389,7 @@ fn (mut a array) set(i int, val voidptr) {
 
 fn (mut a array) push(val voidptr) {
 	a.ensure_cap(a.len + 1)
-	unsafe {C.memcpy(byteptr(a.data) + a.element_size * a.len, val, a.element_size)}
+	unsafe {C.memmove(byteptr(a.data) + a.element_size * a.len, val, a.element_size)}
 	a.len++
 }
 
@@ -620,6 +620,10 @@ pub fn (a []int) reduce(iter fn (int, int) int, accum_start int) int {
 	return accum_
 }
 
+pub fn (mut a array) grow(amount int) {
+	a.ensure_cap(a.len + amount)
+}
+
 // array_eq<T> checks if two arrays contain all the same elements in the same order.
 // []int == []int (also for: i64, f32, f64, byte, string)
 /*
@@ -715,4 +719,22 @@ pub fn (a array) pointers() []voidptr {
 		unsafe {res << a.get_unsafe(i)}
 	}
 	return res
+}
+
+// voidptr.vbytes() - makes a V []byte structure from a C style memory buffer. NB: the data is reused, NOT copied!
+[unsafe]
+pub fn (data voidptr) vbytes(len int) []byte {
+	res := array{
+		element_size: 1
+		data: data
+		len: len
+		cap: len
+	}
+	return res
+}
+
+// byteptr.vbytes() - makes a V []byte structure from a C style memory buffer. NB: the data is reused, NOT copied!
+[unsafe]
+pub fn (data byteptr) vbytes(len int) []byte {
+	return unsafe {voidptr(data).vbytes(len)}
 }

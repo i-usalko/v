@@ -7,7 +7,11 @@ import strings
 
 fn write_value(v Any, i int, len int, mut wr strings.Builder) {
 	str := v.str()
-	wr.write(if v is string { '"$str"' } else { str })
+	if v is string {
+		wr.write('"$str"')
+	} else {
+		wr.write(str)
+	}
 	if i >= len-1 { return }
 	wr.write_b(`,`)
 }
@@ -48,20 +52,19 @@ pub fn (flds []Any) str() string {
 // String representation of the `Any` type.
 pub fn (f Any) str() string {
 	match f {
-		string { return *f }
-		int { return (*f).str() }
-		i64 { return (*f).str() }
-		f32 { return (*f).str() }
-		f64 { return (*f).str() }
-		any_int {	return (*f).str() }
-		any_float {	return (*f).str() }
-		bool { return (*f).str() }
-		map[string]Any { return (*f).str() }
+		string { return f }
+		int { return f.str() }
+		i64 { return f.str() }
+		f32 { return f.str() }
+		f64 { return f.str() }
+		any_int { return f.str() }
+		any_float {	return f.str() }
+		bool { return f.str() }
+		map[string]Any { return f.str() }
 		Null { return 'null' }
 		else {
 			if f is []Any {
-				arr := f
-				return (*arr).str()
+				return f.str()
 			}
 			return ''
 		}

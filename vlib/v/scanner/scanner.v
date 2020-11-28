@@ -7,6 +7,7 @@ import os
 import v.token
 import v.pref
 import v.util
+import v.errors
 
 const (
 	single_quote = `\'`
@@ -45,6 +46,8 @@ pub mut:
 	eofs                        int
 	pref                        &pref.Preferences
 	vet_errors                  []string
+	errors                      []errors.Error
+	warnings                    []errors.Warning
 }
 
 /*
@@ -447,7 +450,7 @@ fn (mut s Scanner) end_of_file() token.Token {
 	s.eofs++
 	if s.eofs > 50 {
 		s.line_nr--
-		s.error('the end of file `$s.file_path` has been reached 50 times already, the v parser is probably stuck.\n' +
+		panic('the end of file `$s.file_path` has been reached 50 times already, the v parser is probably stuck.\n' +
 			'This should not happen. Please report the bug here, and include the last 2-3 lines of your source code:\n' +
 			'https://github.com/vlang/v/issues/new?labels=Bug&template=bug_report.md')
 	}
@@ -576,9 +579,12 @@ fn (mut s Scanner) text_scan() token.Token {
 			}
 			// end of `$expr`
 			// allow `'$a.b'` and `'$a.c()'`
+			if s.is_inter_start && next_char == `\\` && s.look_ahead(2) !in [`n`, `r`, `\\`, `t`] {
+				s.warn('unknown escape sequence \\${s.look_ahead(2)}')
+			}
 			if s.is_inter_start && next_char == `(` {
 				if s.look_ahead(2) != `)` {
-					s.warn('use e.g. `\${f(expr)}` or `\$name\\(` instead of `\$f(expr)`')
+					s.warn('use `\${f(expr)}` instead of `\$f(expr)`')
 				}
 			} else if s.is_inter_start && next_char != `.` {
 				s.is_inter_end = true
@@ -1033,7 +1039,7 @@ fn (mut s Scanner) ident_string() string {
 				s.error(r'cannot use `\x00` (NULL character) in the string literal')
 			}
 		}
-		// ${var} (ignore in vfmt mode)
+		// ${var} (ignore in vfmt mode) (skip \$)
 		if prevc == `$` && c == `{` && !is_raw && s.count_symbol_before(s.pos - 2, slash) % 2 == 0 {
 			s.is_inside_string = true
 			// so that s.pos points to $ at the next step
@@ -1186,21 +1192,39 @@ fn (mut s Scanner) inc_line_number() {
 	}
 }
 
-pub fn (s &Scanner) warn(msg string) {
+pub fn (mut s Scanner) warn(msg string) {
 	pos := token.Position{
 		line_nr: s.line_nr
 		pos: s.pos
 	}
-	eprintln(util.formatted_error('warning:', msg, s.file_path, pos))
+	if s.pref.output_mode == .stdout {
+		eprintln(util.formatted_error('warning:', msg, s.file_path, pos))
+	} else {
+		s.warnings << errors.Warning{
+			file_path: s.file_path
+			pos: pos
+			reporter: .scanner
+			message: msg
+		}
+	}
 }
 
-pub fn (s &Scanner) error(msg string) {
+pub fn (mut s Scanner) error(msg string) {
 	pos := token.Position{
 		line_nr: s.line_nr
 		pos: s.pos
 	}
-	eprintln(util.formatted_error('error:', msg, s.file_path, pos))
-	exit(1)
+	if s.pref.output_mode == .stdout {
+		eprintln(util.formatted_error('error:', msg, s.file_path, pos))
+		exit(1)
+	} else {
+		s.errors << errors.Error{
+			file_path: s.file_path
+			pos: pos
+			reporter: .scanner
+			message: msg
+		}
+	}
 }
 
 fn (mut s Scanner) vet_error(msg string) {

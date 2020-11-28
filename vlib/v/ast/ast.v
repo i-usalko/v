@@ -7,7 +7,7 @@ import v.token
 import v.table
 import v.errors
 
-pub type TypeDecl = AliasTypeDecl | FnTypeDecl | SumTypeDecl | UnionSumTypeDecl
+pub type TypeDecl = AliasTypeDecl | FnTypeDecl | SumTypeDecl
 
 pub type Expr = AnonFn | ArrayInit | AsCast | Assoc | AtExpr | BoolLiteral | CTempVar |
 	CallExpr | CastExpr | ChanInit | CharLiteral | Comment | ComptimeCall | ConcatExpr | EnumVal |
@@ -106,6 +106,8 @@ pub:
 	pos        token.Position
 	expr       Expr // expr.field_name
 	field_name string
+	is_mut     bool // is used for the case `if mut ident.selector is MyType {`, it indicates if the root ident is mutable
+	mut_pos    token.Position
 pub mut:
 	expr_type  table.Type // type of `Foo` in `Foo.bar`
 	typ        table.Type // type of the entire thing (`Foo.bar`)
@@ -284,8 +286,9 @@ pub mut:
 // break, continue
 pub struct BranchStmt {
 pub:
-	kind token.Kind
-	pos  token.Position
+	kind  token.Kind
+	label string
+	pos   token.Position
 }
 
 pub struct CallExpr {
@@ -364,7 +367,7 @@ pub:
 	is_arg          bool // fn args should not be autofreed
 pub mut:
 	typ             table.Type
-	sum_type_cast   table.Type
+	sum_type_casts  []table.Type // nested sum types require nested smart casting, for that a list of types is needed
 	pos             token.Position
 	is_used         bool
 	is_changed      bool // to detect mutable vars that are never changed
@@ -374,11 +377,11 @@ pub mut:
 // struct fields change type in scopes
 pub struct ScopeStructField {
 pub:
-	struct_type   table.Type // type of struct
-	name          string
-	pos           token.Position
-	typ           table.Type
-	sum_type_cast table.Type
+	struct_type    table.Type // type of struct
+	name           string
+	pos            token.Position
+	typ            table.Type
+	sum_type_casts []table.Type // nested sum types require nested smart casting, for that a list of types is needed
 }
 
 pub struct GlobalField {
@@ -446,6 +449,7 @@ pub:
 	language table.Language
 	tok_kind token.Kind
 	pos      token.Position
+	mut_pos  token.Position
 pub mut:
 	obj      ScopeObject
 	mod      string
@@ -456,9 +460,9 @@ pub mut:
 }
 
 pub fn (i &Ident) var_info() IdentVar {
-	match i.info as info {
+	match mut i.info {
 		IdentVar {
-			return *info
+			return i.info
 		}
 		else {
 			// return IdentVar{}
@@ -528,15 +532,13 @@ pub mut:
 
 pub struct IfBranch {
 pub:
-	cond         Expr
-	pos          token.Position
-	body_pos     token.Position
-	comments     []Comment
-	left_as_name string // `name` in `if cond is SumType as name`
-	mut_name     bool // `if mut name is`
+	cond      Expr
+	pos       token.Position
+	body_pos  token.Position
+	comments  []Comment
 pub mut:
-	stmts        []Stmt
-	smartcast    bool // true when cond is `x is SumType`, set in checker.if_expr // no longer needed with union sum types TODO: remove
+	stmts     []Stmt
+	smartcast bool // true when cond is `x is SumType`, set in checker.if_expr // no longer needed with union sum types TODO: remove
 }
 
 pub struct UnsafeExpr {
@@ -562,8 +564,6 @@ pub:
 	cond          Expr
 	branches      []MatchBranch
 	pos           token.Position
-	is_mut        bool // `match mut ast_node {`
-	var_name      string // `match cond as var_name {`
 pub mut:
 	is_expr       bool // returns a value
 	return_type   table.Type
@@ -626,6 +626,8 @@ pub:
 	stmts  []Stmt
 	is_inf bool // `for {}`
 	pos    token.Position
+pub mut:
+	label  string // `label: for {`
 }
 
 pub struct ForInStmt {
@@ -644,6 +646,7 @@ pub mut:
 	val_type   table.Type
 	cond_type  table.Type
 	kind       table.Kind // array/map/string
+	label      string // `label: for {`
 }
 
 pub struct ForCStmt {
@@ -656,6 +659,8 @@ pub:
 	has_inc  bool
 	stmts    []Stmt
 	pos      token.Position
+pub mut:
+	label    string // `label: for {`
 }
 
 // #include etc
@@ -738,32 +743,27 @@ pub:
 	is_pub      bool
 	parent_type table.Type
 	pos         token.Position
+	comments    []Comment
 }
 
+// New implementation of sum types
 pub struct SumTypeDecl {
 pub:
 	name      string
 	is_pub    bool
-	sub_types []table.Type
 	pos       token.Position
-}
-
-// New implementation of sum types
-pub struct UnionSumTypeDecl {
-pub:
-	name      string
-	is_pub    bool
-	pos       token.Position
+	comments  []Comment
 pub mut:
 	sub_types []table.Type
 }
 
 pub struct FnTypeDecl {
 pub:
-	name   string
-	is_pub bool
-	typ    table.Type
-	pos    token.Position
+	name     string
+	is_pub   bool
+	typ      table.Type
+	pos      token.Position
+	comments []Comment
 }
 
 // TODO: handle this differently
@@ -804,15 +804,15 @@ pub:
 
 pub struct ArrayInit {
 pub:
-	pos             token.Position
-	elem_type_pos   token.Position
+	pos             token.Position // `[]` in []Type{} position
+	elem_type_pos   token.Position // `Type` in []Type{} position
 	exprs           []Expr // `[expr, expr]` or `[expr]Type{}` for fixed array
 	ecmnts          [][]Comment // optional iembed comments after each expr
 	is_fixed        bool
 	has_val         bool // fixed size literal `[expr, expr]!!`
 	mod             string
-	len_expr        Expr
-	cap_expr        Expr
+	len_expr        Expr // len: expr
+	cap_expr        Expr // cap: expr
 	default_expr    Expr // init: expr
 	has_len         bool
 	has_cap         bool
@@ -821,8 +821,8 @@ pub mut:
 	is_interface    bool // array of interfaces e.g. `[]Animal` `[Dog{}, Cat{}]`
 	interface_types []table.Type // [Dog, Cat]
 	interface_type  table.Type // Animal
-	elem_type       table.Type
-	typ             table.Type
+	elem_type       table.Type // element type
+	typ             table.Type // array type
 }
 
 pub struct ChanInit {
@@ -1072,9 +1072,6 @@ pub fn (expr Expr) position() token.Position {
 		InfixExpr {
 			left_pos := expr.left.position()
 			right_pos := expr.right.position()
-			if left_pos.pos == 0 || right_pos.pos == 0 {
-				return expr.pos
-			}
 			return token.Position{
 				line_nr: expr.pos.line_nr
 				pos: left_pos.pos
@@ -1141,7 +1138,7 @@ pub fn (stmt Stmt) position() token.Position {
 		AssertStmt, AssignStmt, Block, BranchStmt, CompFor, ConstDecl, DeferStmt, EnumDecl, ExprStmt, FnDecl, ForCStmt, ForInStmt, ForStmt, GotoLabel, GotoStmt, Import, Return, StructDecl, GlobalDecl, HashStmt, InterfaceDecl, Module, SqlStmt { return stmt.pos }
 		GoStmt { return stmt.call_expr.position() }
 		TypeDecl { match stmt {
-				AliasTypeDecl, FnTypeDecl, SumTypeDecl, UnionSumTypeDecl { return stmt.pos }
+				AliasTypeDecl, FnTypeDecl, SumTypeDecl { return stmt.pos }
 			} }
 		// Please, do NOT use else{} here.
 		// This match is exhaustive *on purpose*, to help force

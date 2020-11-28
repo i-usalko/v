@@ -177,13 +177,11 @@ fn (mut g Game) init_game() {
 		mut row := [0].repeat(field_width + 2)
 		row[0] = -1
 		row[field_width + 1] = -1
-		g.field << row
+		g.field << row.clone()
 	}
-	mut first_row := g.field[0]
-	mut last_row := g.field[field_height + 1]
 	for j in 0 .. field_width + 2 {
-		first_row[j] = -1
-		last_row[j] = -1
+		g.field[0][j] = -1
+		g.field[field_height + 1][j] = -1
 	}
 	g.score = 0
 	g.lines = 0
@@ -266,8 +264,7 @@ fn (mut g Game) move_right(dx int) bool {
 		tetro := g.tetro[i]
 		y := tetro.y + g.pos_y
 		x := tetro.x + g.pos_x + dx
-		row := g.field[y]
-		if row[x] != 0 {
+		if g.field[y][x] != 0 {
 			// Do not move
 			return false
 		}
@@ -284,8 +281,7 @@ fn (mut g Game) delete_completed_lines() {
 
 fn (mut g Game) delete_completed_line(y int) {
 	for x := 1; x <= field_width; x++ {
-		f := g.field[y]
-		if f[x] == 0 {
+		if g.field[y][x] == 0 {
 			return
 		}
 	}
@@ -294,9 +290,7 @@ fn (mut g Game) delete_completed_line(y int) {
 	// Move everything down by 1 position
 	for yy := y - 1; yy >= 1; yy-- {
 		for x := 1; x <= field_width; x++ {
-			mut a := g.field[yy + 1]
-			b := g.field[yy]
-			a[x] = b[x]
+			g.field[yy + 1][x] =  g.field[yy][x]
 		}
 	}
 }
@@ -338,7 +332,7 @@ fn (g &Game) draw_tetro() {
 fn (g &Game) draw_next_tetro() {
 	if g.state != .gameover {
 		idx := g.next_tetro_idx * tetro_size * tetro_size
-		next_tetro := g.tetros_cache[idx..idx + tetro_size]
+		next_tetro := g.tetros_cache[idx..idx + tetro_size].clone()
 		pos_y := 0
 		pos_x := field_width / 2 - tetro_size / 2
 		for i in 0 .. tetro_size {
@@ -361,9 +355,8 @@ fn (g &Game) draw_block(i int, j int, color_idx int) {
 fn (g &Game) draw_field() {
 	for i := 1; i < field_height + 1; i++ {
 		for j := 1; j < field_width + 1; j++ {
-			f := g.field[i]
-			if f[j] > 0 {
-				g.draw_block(i, j, f[j])
+			if g.field[i][j] > 0 {
+				g.draw_block(i, j, g.field[i][j])
 			}
 		}
 	}

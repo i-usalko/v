@@ -15,8 +15,7 @@ const (
 		'public', 'return', 'static', 'super', 'switch', 'this', 'throw', 'try', 'typeof', 'var', 'void',
 		'while', 'with', 'yield']
 	tabs        = ['', '\t', '\t\t', '\t\t\t', '\t\t\t\t', '\t\t\t\t\t', '\t\t\t\t\t\t', '\t\t\t\t\t\t\t',
-		'\t\t\t\t\t\t\t\t',
-	]
+		'\t\t\t\t\t\t\t\t', '\t\t\t\t\t\t\t\t\t', '\t\t\t\t\t\t\t\t\t', '\t\t\t\t\t\t\t\t\t']
 )
 
 struct JsGen {
@@ -259,10 +258,6 @@ pub fn (mut g JsGen) typ(t table.Type) string {
 		}
 		.sum_type {
 			// TODO: Implement sumtypes
-			styp = 'sym_type'
-		}
-		.union_sum_type {
-			// TODO: Implement sumtypes
 			styp = 'union_sym_type'
 		}
 		.alias {
@@ -456,7 +451,7 @@ fn (mut g JsGen) stmt(node ast.Stmt) {
 			g.gen_const_decl(node)
 		}
 		ast.DeferStmt {
-			g.defer_stmts << *node
+			g.defer_stmts << node
 		}
 		ast.EnumDecl {
 			g.gen_enum_decl(node)
@@ -466,7 +461,7 @@ fn (mut g JsGen) stmt(node ast.Stmt) {
 			g.gen_expr_stmt(node)
 		}
 		ast.FnDecl {
-			g.fn_decl = node
+			g.fn_decl = &node
 			g.gen_fn_decl(node)
 		}
 		ast.ForCStmt {
@@ -642,7 +637,8 @@ fn (mut g JsGen) expr(node ast.Expr) {
 			g.gen_string_inter_literal(node)
 		}
 		ast.StringLiteral {
-			g.write('"$node.val"')
+			text := node.val.replace('`', '\\`')
+			g.write('`$text`')
 		}
 		ast.StructInit {
 			// `user := User{name: 'Bob'}`
@@ -1009,17 +1005,21 @@ fn (mut g JsGen) gen_go_stmt(node ast.GoStmt) {
 	// x := node.call_expr as ast.CallEpxr // TODO
 	match node.call_expr {
 		ast.CallExpr {
-			mut name := it.name
-			if it.is_method {
-				receiver_sym := g.table.get_type_symbol(it.receiver_type)
+			mut name := node.call_expr.name
+			if node.call_expr.is_method {
+				receiver_sym := g.table.get_type_symbol(node.call_expr.receiver_type)
 				name = receiver_sym.name + '.' + name
+			}
+			// todo: please add a name feild without the mod name for ast.CallExpr
+			if name.starts_with('${node.call_expr.mod}.') {
+				name = name[node.call_expr.mod.len + 1..]
 			}
 			g.writeln('await new Promise(function(resolve){')
 			g.inc_indent()
 			g.write('${name}(')
-			for i, arg in it.args {
+			for i, arg in node.call_expr.args {
 				g.expr(arg.expr)
-				if i < it.args.len - 1 {
+				if i < node.call_expr.args.len - 1 {
 					g.write(', ')
 				}
 			}
@@ -1051,7 +1051,7 @@ fn (mut g JsGen) gen_interface_decl(it ast.InterfaceDecl) {
 fn (mut g JsGen) gen_return_stmt(it ast.Return) {
 	if it.exprs.len == 0 {
 		// Returns nothing
-		g.write('return;')
+		g.writeln('return;')
 		return
 	}
 	g.write('return ')
@@ -1174,6 +1174,14 @@ fn (mut g JsGen) gen_call_expr(it ast.CallExpr) {
 	} else {
 		name = g.js_name(it.name)
 	}
+	call_return_is_optional := it.return_type.has_flag(.optional)
+	if call_return_is_optional {
+		g.writeln('(function(){')
+		g.inc_indent()
+		g.writeln('try {')
+		g.inc_indent()
+		g.write('return builtin.unwrap(')
+	}
 	g.expr(it.left)
 	if it.is_method { // foo.bar.baz()
 		sym := g.table.get_type_symbol(it.receiver_type)
@@ -1183,21 +1191,22 @@ fn (mut g JsGen) gen_call_expr(it ast.CallExpr) {
 			node := it
 			g.write(it.name)
 			g.write('(')
-			match node.args[0].expr {
+			expr := node.args[0].expr
+			match expr {
 				ast.AnonFn {
-					g.gen_fn_decl(it.decl)
+					g.gen_fn_decl(expr.decl)
 					g.write(')')
 					return
 				}
 				ast.Ident {
-					if it.kind == .function {
-						g.write(g.js_name(it.name))
+					if expr.kind == .function {
+						g.write(g.js_name(expr.name))
 						g.write(')')
 						return
-					} else if it.kind == .variable {
-						v_sym := g.table.get_type_symbol(it.var_info().typ)
+					} else if expr.kind == .variable {
+						v_sym := g.table.get_type_symbol(expr.var_info().typ)
 						if v_sym.kind == .function {
-							g.write(g.js_name(it.name))
+							g.write(g.js_name(expr.name))
 							g.write(')')
 							return
 						}
@@ -1222,7 +1231,41 @@ fn (mut g JsGen) gen_call_expr(it ast.CallExpr) {
 			g.write(', ')
 		}
 	}
+	// end method call
 	g.write(')')
+	if call_return_is_optional {
+		// end unwrap
+		g.writeln(')')
+		g.dec_indent()
+		// begin catch block
+		g.writeln('} catch(err) {')
+		g.inc_indent()
+		// gen or block contents
+		match it.or_block.kind {
+			.block {
+				if it.or_block.stmts.len > 1 {
+					g.stmts(it.or_block.stmts[..it.or_block.stmts.len - 1])
+				}
+				g.write('return ')
+				g.stmt(it.or_block.stmts.last())
+			}
+			.propagate {
+				panicstr := '`optional not set (\${err})`'
+				if g.file.mod.name == 'main' && g.fn_decl.name == 'main.main' {
+					g.writeln('return builtin.panic($panicstr)')
+				} else {
+					g.writeln('builtin.js_throw(err)')
+				}
+			}
+			else {}
+		}
+		// end catch
+		g.dec_indent()
+		g.writeln('}')
+		// end anon fn
+		g.dec_indent()
+		g.write('})()')
+	}
 }
 
 fn (mut g JsGen) gen_ident(node ast.Ident) {
@@ -1268,7 +1311,11 @@ fn (mut g JsGen) gen_if_expr(node ast.IfExpr) {
 					}
 					else {
 						g.write('if (')
-						g.expr(branch.cond)
+						if '$branch.cond' == 'js' {
+							g.write('true')
+						} else {
+							g.expr(branch.cond)
+						}
 						g.writeln(') {')
 					}
 				}
@@ -1301,17 +1348,16 @@ fn (mut g JsGen) gen_index_expr(expr ast.IndexExpr) {
 	left_typ := g.table.get_type_symbol(expr.left_type)
 	// TODO: Handle splice setting if it's implemented
 	if expr.index is ast.RangeExpr {
-		range := expr.index as ast.RangeExpr
 		g.expr(expr.left)
 		g.write('.slice(')
-		if range.has_low {
-			g.expr(range.low)
+		if expr.index.has_low {
+			g.expr(expr.index.low)
 		} else {
 			g.write('0')
 		}
 		g.write(', ')
-		if range.has_high {
-			g.expr(range.high)
+		if expr.index.has_high {
+			g.expr(expr.index.high)
 		} else {
 			g.expr(expr.left)
 			g.write('.length')
