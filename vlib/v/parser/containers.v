@@ -30,16 +30,15 @@ fn (mut p Parser) array_init() ast.ArrayInit {
 		if p.tok.kind in [.name, .amp, .lsbr] && p.tok.line_nr == line_nr {
 			elem_type_pos = p.tok.position()
 			elem_type = p.parse_type()
-			sym := p.table.get_type_symbol(elem_type)
 			// this is set here because it's a known type, others could be the
 			// result of expr so we do those in checker
-			idx := p.table.find_or_register_array(elem_type, 1, sym.mod)
+			idx := p.table.find_or_register_array(elem_type, 1)
 			array_type = table.new_type(idx)
 			has_type = true
 		}
 	} else {
 		// [1,2,3] or [const]byte
-		for i := 0; p.tok.kind != .rsbr; i++ {
+		for i := 0; p.tok.kind !in [.rsbr, .eof]; i++ {
 			exprs << p.expr(0)
 			ecmnts << p.eat_comments()
 			if p.tok.kind == .comma {
@@ -66,6 +65,7 @@ fn (mut p Parser) array_init() ast.ArrayInit {
 					n := p.check_name()
 					if n != 'init' {
 						p.error_with_pos('expected `init:`, not `$n`', pos)
+						return ast.ArrayInit{}
 					}
 					p.check(.colon)
 					has_default = true
@@ -118,6 +118,7 @@ fn (mut p Parser) array_init() ast.ArrayInit {
 				}
 				else {
 					p.error('wrong field `$key`, expecting `len`, `cap`, or `init`')
+					return ast.ArrayInit{}
 				}
 			}
 			if p.tok.kind != .rcbr {

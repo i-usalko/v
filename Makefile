@@ -2,15 +2,18 @@ CC ?= cc
 CFLAGS ?=
 LDFLAGS ?=
 TMPDIR ?= /tmp
+VROOT  ?= .
 VC     ?= ./vc
-V      := ./v
+V      ?= ./v
+VCREPO ?= https://github.com/vlang/vc
+TCCREPO ?= https://github.com/vlang/tccbin
 
 VCFILE := v.c
-TMPTCC := /var/tmp/tcc
-VCREPO := https://github.com/vlang/vc
-TCCREPO := https://github.com/vlang/tccbin
+TMPTCC := $(VROOT)/thirdparty/tcc
+TCCOS := unknown
+TCCARCH := unknown
 GITCLEANPULL := git clean -xf && git pull --quiet
-GITFASTCLONE := git clone --depth 1 --quiet
+GITFASTCLONE := git clone --depth 1 --quiet --single-branch
 
 #### Platform detections and overrides:
 _SYS := $(shell uname 2>/dev/null || echo Unknown)
@@ -24,26 +27,54 @@ endif
 
 ifeq ($(_SYS),Linux)
 LINUX := 1
+TCCOS := linux
 endif
 
 ifeq ($(_SYS),Darwin)
 MAC := 1
+TCCOS := macos
 endif
 
 ifeq ($(_SYS),FreeBSD)
+TCCOS := freebsd
 LDFLAGS += -lexecinfo
 endif
 
 ifdef ANDROID_ROOT
 ANDROID := 1
 undefine LINUX
+TCCOS := android
 endif
 #####
 
 ifdef WIN32
-TCCREPO := https://github.com/vlang/tccbin_win
+TCCOS := windows
 VCFILE := v_win.c
 endif
+
+TCCARCH := $(shell uname -m 2>/dev/null || echo unknown)
+
+ifeq ($(TCCARCH),x86_64)
+	TCCARCH := amd64
+else
+ifneq ($(filter x86%,$(TCCARCH)),)
+	TCCARCH := i386
+else
+ifeq ($(TCCARCH),aarch64)
+	TCCARCH := arm64
+else
+ifneq ($(filter arm%,$(TCCARCH)),)
+	TCCARCH := arm
+# otherwise, just use the arch name
+endif
+endif
+endif
+endif
+
+# note that a branch may not exist yet for the user's system configuration,
+# in that case they'll get an error from git while cloning it.
+# TODO: print a pretty error ourselves in that case, and ask the user to open a feature request
+TCCBRANCH := thirdparty-$(TCCOS)-$(TCCARCH)
 
 all: latest_vc latest_tcc
 ifdef WIN32
@@ -54,7 +85,7 @@ else
 	$(V) self
 endif
 else
-	$(CC) $(CFLAGS) -g -std=gnu99 -w -o $(V) $(VC)/$(VCFILE) -lm -lpthread $(LDFLAGS) 
+	$(CC) $(CFLAGS) -g -std=gnu99 -w -o $(V) $(VC)/$(VCFILE) -lm -lpthread $(LDFLAGS)
 ifdef ANDROID
 	chmod 755 v
 endif
@@ -91,27 +122,19 @@ fresh_vc:
 
 latest_tcc: $(TMPTCC)/.git/config
 ifndef ANDROID
-ifndef MAC
 ifndef local
 	cd $(TMPTCC) && $(GITCLEANPULL)
 else
 	@echo "Using local tcc"
 endif
 endif
-endif
 
 fresh_tcc:
-ifndef ANDROID
-ifndef MAC
 	rm -rf $(TMPTCC)
-	$(GITFASTCLONE) $(TCCREPO) $(TMPTCC)
-endif
-endif
+	$(GITFASTCLONE) --branch $(TCCBRANCH) $(TCCREPO) $(TMPTCC)
 
 $(TMPTCC)/.git/config:
-ifndef MAC
 	$(MAKE) fresh_tcc
-endif
 
 $(VC)/.git/config:
 	$(MAKE) fresh_vc

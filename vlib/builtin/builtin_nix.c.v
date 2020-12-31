@@ -48,7 +48,7 @@ fn print_backtrace_skipping_top_frames(xskipframes int) bool {
 // so there is no need to have their twins in builtin_windows.v
 fn print_backtrace_skipping_top_frames_mac(skipframes int) bool {
 	$if macos {
-		buffer := [100]byteptr{}
+		buffer := [100]voidptr{}
 		nr_ptrs := C.backtrace(buffer, 100)
 		if nr_ptrs < 2 {
 			eprintln('C.backtrace returned less than 2 frames')
@@ -61,7 +61,7 @@ fn print_backtrace_skipping_top_frames_mac(skipframes int) bool {
 
 fn print_backtrace_skipping_top_frames_freebsd(skipframes int) bool {
 	$if freebsd {
-		buffer := [100]byteptr{}
+		buffer := [100]voidptr{}
 		nr_ptrs := C.backtrace(buffer, 100)
 		if nr_ptrs < 2 {
 			eprintln('C.backtrace returned less than 2 frames')
@@ -131,7 +131,7 @@ fn print_backtrace_skipping_top_frames_linux(skipframes int) bool {
 			// NB: it is shortened here to just d. , just so that it fits, and so
 			// that the common error file:lineno: line format is enforced.
 			output = output.replace(' (discriminator', ': (d.')
-			eprintln('${output:-46s} | ${addr:14s} | $beforeaddr')
+			eprintln('${output:-55s} | ${addr:14s} | $beforeaddr')
 		}
 	}
 	return true
@@ -140,6 +140,6 @@ fn print_backtrace_skipping_top_frames_linux(skipframes int) bool {
 fn break_if_debugger_attached() {
 	unsafe {
 		mut ptr := &voidptr(0)
-		*ptr = 0
+		*ptr = voidptr(0)
 	}
 }

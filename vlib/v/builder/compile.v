@@ -61,7 +61,7 @@ pub fn compile(command string, pref &pref.Preferences) {
 	}
 	b.exit_on_invalid_syntax()
 	// running does not require the parsers anymore
-	unsafe {b.myfree()}
+	unsafe { b.myfree() }
 	if pref.is_test || pref.is_run {
 		b.run_compiled_executable_and_exit()
 	}
@@ -72,7 +72,7 @@ pub fn compile(command string, pref &pref.Preferences) {
 fn (mut b Builder) myfree() {
 	// for file in b.parsed_files {
 	// }
-	unsafe {b.parsed_files.free()}
+	unsafe { b.parsed_files.free() }
 }
 
 fn (b &Builder) exit_on_invalid_syntax() {
@@ -129,18 +129,24 @@ fn (mut b Builder) run_compiled_executable_and_exit() {
 		if b.pref.is_verbose {
 			println('command to run executable: $cmd')
 		}
-		if b.pref.is_test {
-			exit(os.system(cmd))
-		}
-		if b.pref.is_run {
+		if b.pref.is_test || b.pref.is_run {
 			ret := os.system(cmd)
-			// TODO: make the runner wrapping as transparent as possible
-			// (i.e. use execve when implemented). For now though, the runner
-			// just returns the same exit code as the child process.
+			b.cleanup_run_executable_after_exit(exefile)
 			exit(ret)
 		}
 	}
 	exit(0)
+}
+
+fn (mut v Builder) cleanup_run_executable_after_exit(exefile string) {
+	if v.pref.reuse_tmpc {
+		v.pref.vrun_elog('keeping executable: $exefile , because -keepc was passed')
+		return
+	}
+	if os.is_file(exefile) {
+		v.pref.vrun_elog('remove run executable: $exefile')
+		os.rm(exefile)
+	}
 }
 
 // 'strings' => 'VROOT/vlib/strings'

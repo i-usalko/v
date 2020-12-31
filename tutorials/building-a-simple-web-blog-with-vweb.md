@@ -23,7 +23,7 @@ The code is available <a href='https://github.com/vlang/v/tree/master/tutorials/
 ### Installing V
 
 ```
-wget https://github.com/vlang/v/releases/latest/download/v_linux.zip
+wget https://github.com/vlang/v/releases/latest/download/linux.zip
 unzip v_linux.zip
 cd v
 sudo ./v symlink
@@ -35,6 +35,12 @@ Now V should be globally available on your system.
 If you use a BSD system, Solaris, Android, or simply want to install V
 from source, follow the simple instructions here:
 https://github.com/vlang/v#installing-v-from-source
+
+
+### Install SQLite development dependency
+
+If you don't have it already installed, look at the
+[`sqlite` README](../vlib/sqlite/README.md) for instructions.
 
 
 ### Creating a new Vweb project
@@ -69,8 +75,11 @@ pub fn (mut app App) index() vweb.Result {
 	return vweb.Result{}
 }
 
-pub fn (app &App) init() {}
-pub fn (app &App) init_once() {}
+pub fn (app &App) init() {
+}
+
+pub fn (app &App) init_once() {
+}
 ```
 
 Run it with
@@ -97,6 +106,8 @@ no routing rules either:
 
 ```v oksyntax
 import vweb
+import time
+
 fn (mut app App) time() vweb.Result {
 	app.vweb.text(time.now().format())
 	return vweb.Result{}
@@ -159,7 +170,7 @@ but V is a language with pure functions by default, and you won't be able
 to modify any data from a view. `<b>@foo.bar()</b>` will only work if the `bar()` method
 doesn't modify `foo`.
 
-The HTML template is compiled to V during the compilation of the website, 
+The HTML template is compiled to V during the compilation of the website,
 that's done by the `$vweb.html()` line.
 (`$` always means compile time actions in V.) offering the following benefits:
 
@@ -176,7 +187,7 @@ into a single binary file together with the web application itself.
 
 Now let's display some articles!
 
-We'll be using V's builtin ORM and a SQLite database. 
+We'll be using V's builtin ORM and a SQLite database.
 (V ORM will also support MySQL, Postgre, and SQL Server soon.)
 
 Create a SQLite file with the schema:
@@ -335,10 +346,11 @@ Create `new.html`:
 
 ```v oksyntax
 import vweb
+
 pub fn (mut app App) new_article() vweb.Result {
 	title := app.vweb.form['title']
 	text := app.vweb.form['text']
-	if title == '' || text == ''  {
+	if title == '' || text == '' {
 		app.vweb.text('Empty text/title')
 		return vweb.Result{}
 	}
@@ -374,6 +386,8 @@ in V is very simple:
 
 ```v oksyntax
 import vweb
+import json
+
 pub fn (mut app App) articles() vweb.Result {
 	articles := app.find_all_articles()
 	app.vweb.json(json.encode(articles))

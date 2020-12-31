@@ -22,7 +22,7 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 	// Prefix
 	match p.tok.kind {
 		.key_mut, .key_shared, .key_atomic, .key_static {
-			node = p.name_expr()
+			node = p.parse_ident(table.Language.v)
 			p.is_stmt_ident = is_stmt_ident
 		}
 		.name {
@@ -50,9 +50,16 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 		}
 		.dollar {
 			match p.peek_tok.kind {
-				.name { return p.vweb() }
-				.key_if { return p.if_expr(true) }
-				else { p.error('unexpected $') }
+				.name {
+					return p.vweb()
+				}
+				.key_if {
+					return p.if_expr(true)
+				}
+				else {
+					p.error_with_pos('unexpected `$`', p.peek_tok.position())
+					return ast.Expr{}
+				}
 			}
 		}
 		.chartoken {
@@ -96,18 +103,21 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 		}
 		.key_unsafe {
 			// unsafe {
-			pos := p.tok.position()
+			mut pos := p.tok.position()
 			p.next()
 			if p.inside_unsafe {
 				p.error_with_pos('already inside `unsafe` block', pos)
+				return ast.Expr{}
 			}
 			p.inside_unsafe = true
 			p.check(.lcbr)
+			e := p.expr(0)
+			p.check(.rcbr)
+			pos.last_line = p.prev_tok.line_nr - 1
 			node = ast.UnsafeExpr{
-				expr: p.expr(0)
+				expr: e
 				pos: pos
 			}
-			p.check(.rcbr)
 			p.inside_unsafe = false
 		}
 		.key_lock, .key_rlock {
@@ -187,14 +197,17 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 				// it should be a struct
 				if p.peek_tok.kind == .pipe {
 					node = p.assoc()
-				} else if p.peek_tok.kind == .colon || p.tok.kind == .rcbr {
+				} else if p.peek_tok.kind == .colon || p.tok.kind in [.rcbr, .comment] {
 					node = p.struct_init(true) // short_syntax: true
 				} else if p.tok.kind == .name {
 					p.next()
-					lit := if p.tok.lit != '' { p.tok.lit } else { p.tok.kind.str() }
-					p.error('unexpected `$lit`, expecting `:`')
+					s := if p.tok.lit != '' { '`$p.tok.lit`' } else { p.tok.kind.str() }
+					p.error_with_pos('unexpected $s, expecting `:`', p.tok.position())
+					return ast.Expr{}
 				} else {
-					p.error('unexpected `$p.tok.lit`, expecting struct key')
+					p.error_with_pos('unexpected `$p.tok.lit`, expecting struct key',
+						p.tok.position())
+					return ast.Expr{}
 				}
 			}
 			p.check(.rcbr)
@@ -224,13 +237,19 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 						left: node
 						args: args
 						pos: pos
+						scope: p.scope
 					}
 				}
 				return node
 			}
 		}
 		else {
-			p.error('expr(): bad token `$p.tok.kind.str()`')
+			if p.tok.kind != .eof {
+				// eof should be handled where it happens
+				p.error_with_pos('invalid expression: unexpected `$p.tok.kind.str()` token',
+					p.tok.position())
+				return ast.Expr{}
+			}
 		}
 	}
 	return p.expr_with_left(node, precedence, is_stmt_ident)
@@ -242,10 +261,26 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 	for precedence < p.tok.precedence() {
 		if p.tok.kind == .dot {
 			node = p.dot_expr(node)
+			if p.name_error {
+				return node
+			}
 			p.is_stmt_ident = is_stmt_ident
 		} else if p.tok.kind == .lsbr {
 			node = p.index_expr(node)
 			p.is_stmt_ident = is_stmt_ident
+			if p.tok.kind == .lpar && p.tok.line_nr == p.prev_tok.line_nr && node is ast.IndexExpr {
+				p.next()
+				pos := p.tok.position()
+				args := p.call_args()
+				p.check(.rpar)
+				node = ast.CallExpr{
+					left: node
+					args: args
+					pos: pos
+					scope: p.scope
+				}
+				p.is_stmt_ident = is_stmt_ident
+			}
 		} else if p.tok.kind == .key_as {
 			// sum type as cast `x := SumType as Variant`
 			pos := p.tok.position()
@@ -341,13 +376,18 @@ fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 		p.is_amp = true
 	}
 	if op == .arrow {
+		p.or_is_handled = true
 		p.register_auto_import('sync')
 	}
 	// if op == .mul && !p.inside_unsafe {
 	// p.warn('unsafe')
 	// }
 	p.next()
-	mut right := if op == .minus { p.expr(token.Precedence.call) } else { p.expr(token.Precedence.prefix) }
+	mut right := if op == .minus {
+		p.expr(token.Precedence.call)
+	} else {
+		p.expr(token.Precedence.prefix)
+	}
 	p.is_amp = false
 	if mut right is ast.CastExpr {
 		right.in_prexpr = true
@@ -360,13 +400,13 @@ fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 		if p.tok.kind == .key_orelse {
 			p.next()
 			p.open_scope()
-			p.scope.register('errcode', ast.Var{
+			p.scope.register(ast.Var{
 				name: 'errcode'
 				typ: table.int_type
 				pos: p.tok.position()
 				is_used: true
 			})
-			p.scope.register('err', ast.Var{
+			p.scope.register(ast.Var{
 				name: 'err'
 				typ: table.string_type
 				pos: p.tok.position()
@@ -381,6 +421,7 @@ fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 			p.next()
 			or_kind = .propagate
 		}
+		p.or_is_handled = false
 	}
 	return ast.PrefixExpr{
 		op: op

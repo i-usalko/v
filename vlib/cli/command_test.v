@@ -24,13 +24,13 @@ fn test_if_subcommands_parse_args() {
 	}
 	subcmd := cli.Command{
 		name: 'subcommand'
-		execute: empty_func
+		execute: if_subcommands_parse_args_func
 	}
 	cmd.add_command(subcmd)
 	cmd.parse(['command', 'subcommand', 'arg0', 'arg1'])
 }
 
-fn if_subcommands_parse_args_func(cmd cli.Command) {
+fn if_subcommands_parse_args_func(cmd cli.Command) ? {
 	assert cmd.name == 'subcommand' && compare_arrays(cmd.args, ['arg0', 'arg1'])
 }
 
@@ -106,9 +106,7 @@ fn test_if_multiple_flags_get_set() {
 }
 
 fn flag_is_set_in_subcommand(cmd cli.Command) ? {
-	flag := cmd.flags.get_string('flag') or {
-		panic(err)
-	}
+	flag := cmd.flags.get_string('flag') or { panic(err) }
 	assert flag == 'value'
 }
 

@@ -7,6 +7,20 @@ import v.table
 import v.token
 import v.ast
 
+pub fn (mut c Checker) check_expected_call_arg(got table.Type, expected_ table.Type) ? {
+	mut expected := expected_
+	// variadic
+	if expected.has_flag(.variadic) {
+		exp_type_sym := c.table.get_type_symbol(expected_)
+		exp_info := exp_type_sym.info as table.Array
+		expected = exp_info.elem_type
+	}
+	if c.check_types(got, expected) {
+		return
+	}
+	return error('cannot use `${c.table.type_to_str(got.clear_flag(.variadic))}` as `${c.table.type_to_str(expected.clear_flag(.variadic))}`')
+}
+
 pub fn (mut c Checker) check_basic(got table.Type, expected table.Type) bool {
 	if got == expected {
 		return true
@@ -16,6 +30,11 @@ pub fn (mut c Checker) check_basic(got table.Type, expected table.Type) bool {
 	exp_idx := t.unalias_num_type(expected).idx()
 	// got_is_ptr := got.is_ptr()
 	exp_is_ptr := expected.is_ptr()
+	// exp_is_optional := expected.has_flag(.optional)
+	// got_is_optional := got.has_flag(.optional)
+	// if (exp_is_optional && !got_is_optional) || (!exp_is_optional && got_is_optional) {
+	// return false
+	//}
 	// println('check: $got_type_sym.name, $exp_type_sym.name')
 	// # NOTE: use idxs here, and symbols below for perf
 	if got_idx == exp_idx {
@@ -24,7 +43,7 @@ pub fn (mut c Checker) check_basic(got table.Type, expected table.Type) bool {
 		return true
 	}
 	if got_idx == table.none_type_idx && expected.has_flag(.optional) {
-		return true
+		return false
 	}
 	// allow pointers to be initialized with 0. TODO: use none instead
 	if exp_is_ptr && got_idx == table.int_type_idx {
@@ -74,10 +93,12 @@ pub fn (mut c Checker) check_basic(got table.Type, expected table.Type) bool {
 		(exp_type_sym.is_int() && got_type_sym.kind == .enum_) {
 		return true
 	}
-	// TODO
-	// if got_type_sym.kind == .array && exp_type_sym.kind == .array {
-	// return true
-	// }
+	// array fn
+	if got_type_sym.kind == .array && exp_type_sym.kind == .array {
+		if c.table.type_to_str(got) == c.table.type_to_str(expected) {
+			return true
+		}
+	}
 	if got_type_sym.kind == .array_fixed && exp_type_sym.kind == .byteptr {
 		info := got_type_sym.info as table.ArrayFixed
 		if info.elem_type.idx() == table.byte_type_idx {
@@ -85,13 +106,14 @@ pub fn (mut c Checker) check_basic(got table.Type, expected table.Type) bool {
 		}
 	}
 	// TODO
-	if exp_type_sym.name == 'array' || got_type_sym.name == 'array' {
+	// if exp_type_sym.name == 'array' || got_type_sym.name == 'array' {
+	if got_idx == table.array_type_idx || exp_idx == table.array_type_idx {
 		return true
 	}
 	// TODO
 	// accept [] when an expected type is an array
 	if got_type_sym.kind == .array &&
-		got_type_sym.name == 'array_void' && exp_type_sym.kind == .array {
+		exp_type_sym.kind == .array && got_type_sym.name == 'array_void' {
 		return true
 	}
 	// type alias
@@ -101,7 +123,7 @@ pub fn (mut c Checker) check_basic(got table.Type, expected table.Type) bool {
 		return true
 	}
 	// sum type
-	if c.check_sumtype_compatibility(got, expected) {
+	if c.table.sumtype_has_variant(expected, got) {
 		return true
 	}
 	// fn type
@@ -282,9 +304,14 @@ pub fn (mut c Checker) check_expected(got table.Type, expected table.Type) ? {
 	if c.check_types(got, expected) {
 		return
 	}
+	return error(c.expected_msg(got, expected))
+}
+
+[inline]
+fn (c &Checker) expected_msg(got table.Type, expected table.Type) string {
 	exps := c.table.type_to_str(expected)
 	gots := c.table.type_to_str(got)
-	return error('expected `$exps`, not `$gots`')
+	return 'expected `$exps`, not `$gots`'
 }
 
 pub fn (mut c Checker) symmetric_check(left table.Type, right table.Type) bool {
@@ -305,7 +332,9 @@ pub fn (mut c Checker) symmetric_check(left table.Type, right table.Type) bool {
 }
 
 pub fn (c &Checker) get_default_fmt(ftyp table.Type, typ table.Type) byte {
-	if typ.is_float() {
+	if ftyp.has_flag(.optional) {
+		return `s`
+	} else if typ.is_float() {
 		return `g`
 	} else if typ.is_signed() || typ.is_any_int() {
 		return `d`
@@ -323,9 +352,12 @@ pub fn (c &Checker) get_default_fmt(ftyp table.Type, typ table.Type) byte {
 				return `s`
 			}
 		}
+		if sym.kind == .function {
+			return `s`
+		}
 		if ftyp in [table.string_type, table.bool_type] ||
 			sym.kind in
-			[.enum_, .array, .array_fixed, .struct_, .map, .multi_return, .sum_type] || ftyp.has_flag(.optional) ||
+			[.enum_, .array, .array_fixed, .struct_, .map, .multi_return, .sum_type, .none_] || ftyp.has_flag(.optional) ||
 			sym.has_method('str') {
 			return `s`
 		} else {
@@ -375,12 +407,12 @@ pub fn (mut c Checker) string_inter_lit(mut node ast.StringInterLiteral) table.T
 			}
 			node.need_fmts[i] = fmt != c.get_default_fmt(ftyp, typ)
 		}
+		// check recursive str
+		if c.cur_fn.is_method && c.cur_fn.name == 'str' && c.cur_fn.receiver.name == expr.str() {
+			c.error('cannot call `str()` method recursively', expr.position())
+		}
 	}
 	return table.string_type
-}
-
-pub fn (c &Checker) check_sumtype_compatibility(a table.Type, b table.Type) bool {
-	return c.table.sumtype_has_variant(a, b) || c.table.sumtype_has_variant(b, a)
 }
 
 pub fn (mut c Checker) infer_fn_types(f table.Fn, mut call_expr ast.CallExpr) {
@@ -388,15 +420,19 @@ pub fn (mut c Checker) infer_fn_types(f table.Fn, mut call_expr ast.CallExpr) {
 	mut typ := table.void_type
 	for i, param in f.params {
 		arg := call_expr.args[i]
-		if param.type_source_name == gt_name {
+		if param.typ.has_flag(.generic) {
 			typ = arg.typ
 			break
 		}
 		arg_sym := c.table.get_type_symbol(arg.typ)
-		if arg_sym.kind == .array && param.type_source_name == '[]$gt_name' {
-			info := arg_sym.info as table.Array
-			typ = info.elem_type
-			break
+		param_type_sym := c.table.get_type_symbol(param.typ)
+		if arg_sym.kind == .array && param_type_sym.kind == .array {
+			param_info := param_type_sym.info as table.Array
+			if param_info.elem_type.has_flag(.generic) {
+				arg_info := arg_sym.info as table.Array
+				typ = arg_info.elem_type
+				break
+			}
 		}
 	}
 	if typ == table.void_type {

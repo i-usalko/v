@@ -4,27 +4,31 @@
 
 module builtin
 
+fn (a any) toString()
+
 pub fn println(s any) {
-	JS.console.log(s)
+	// Quickfix to properly print basic types
+	// TODO: Add proper detection code for this
+	JS.console.log(s.toString())
 }
 
 pub fn print(s any) {
 	// TODO
 	// $if js.node {
-		JS.process.stdout.write(s)
+		JS.process.stdout.write(s.toString())
 	// } $else {
 	//	panic('Cannot `print` in a browser, use `println` instead')
 	// }
 }
 
 pub fn eprintln(s any) {
-	JS.console.error(s)
+	JS.console.error(s.toString())
 }
 
 pub fn eprint(s any) {
 	// TODO
 	// $if js.node {
-		JS.process.stderr.write(s)
+		JS.process.stderr.write(s.toString())
 	// } $else {
 	//	panic('Cannot `eprint` in a browser, use `eprintln` instead')
 	// }

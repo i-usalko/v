@@ -28,13 +28,18 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 	mut prev_guard := false
 	for p.tok.kind in [.key_if, .key_else] {
 		p.inside_if = true
-		start_pos := if is_comptime { p.prev_tok.position().extend(p.tok.position()) } else { p.tok.position() }
+		start_pos := if is_comptime {
+			p.prev_tok.position().extend(p.tok.position())
+		} else {
+			p.tok.position()
+		}
 		if p.tok.kind == .key_else {
 			comments << p.eat_comments()
 			p.check(.key_else)
 			comments << p.eat_comments()
 			if p.tok.kind == .key_match {
 				p.error('cannot use `match` with `if` statements')
+				return ast.IfExpr{}
 			}
 			if p.tok.kind == .lcbr {
 				// else {
@@ -42,16 +47,16 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 				p.inside_if = false
 				end_pos := p.prev_tok.position()
 				body_pos := p.tok.position()
+				p.open_scope()
 				// only declare `err` if previous branch was an `if` guard
 				if prev_guard {
-					p.open_scope()
-					p.scope.register('errcode', ast.Var{
+					p.scope.register(ast.Var{
 						name: 'errcode'
 						typ: table.int_type
 						pos: body_pos
 						is_used: true
 					})
-					p.scope.register('err', ast.Var{
+					p.scope.register(ast.Var{
 						name: 'err'
 						typ: table.string_type
 						pos: body_pos
@@ -59,18 +64,13 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 					})
 				}
 				branches << ast.IfBranch{
-					stmts: if prev_guard {
-						p.parse_block_no_scope(false)
-					} else {
-						p.parse_block()
-					}
+					stmts: p.parse_block_no_scope(false)
 					pos: start_pos.extend(end_pos)
 					body_pos: body_pos.extend(p.tok.position())
 					comments: comments
+					scope: p.scope
 				}
-				if prev_guard {
-					p.close_scope()
-				}
+				p.close_scope()
 				comments = []
 				break
 			}
@@ -82,6 +82,7 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 		p.check(.key_if)
 		if p.tok.kind == .key_match {
 			p.error('cannot use `match` with `if` statements')
+			return ast.IfExpr{}
 		}
 		comments << p.eat_comments()
 		mut cond := ast.Expr{}
@@ -100,7 +101,7 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 				var_name: var_name
 				expr: expr
 			}
-			p.scope.register(var_name, ast.Var{
+			p.scope.register(ast.Var{
 				name: var_name
 				expr: cond
 				pos: var_pos
@@ -114,21 +115,25 @@ fn (mut p Parser) if_expr(is_comptime bool) ast.IfExpr {
 		end_pos := p.prev_tok.position()
 		body_pos := p.tok.position()
 		p.inside_if = false
-		stmts := p.parse_block()
-		if is_guard {
-			p.close_scope()
-		}
+		p.open_scope()
+		stmts := p.parse_block_no_scope(false)
 		branches << ast.IfBranch{
 			cond: cond
 			stmts: stmts
 			pos: start_pos.extend(end_pos)
 			body_pos: body_pos.extend(p.prev_tok.position())
 			comments: comments
+			scope: p.scope
+		}
+		p.close_scope()
+		if is_guard {
+			p.close_scope()
 		}
 		comments = p.eat_comments()
 		if is_comptime {
 			if p.tok.kind == .key_else {
 				p.error('use `\$else` instead of `else` in compile-time `if` branches')
+				return ast.IfExpr{}
 			}
 			if p.peek_tok.kind == .key_else {
 				p.check(.dollar)
@@ -159,7 +164,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 		p.check(.lcbr)
 	}
 	mut branches := []ast.MatchBranch{}
-	for {
+	for p.tok.kind != .eof {
 		branch_first_pos := p.tok.position()
 		comments := p.eat_comments() // comments before {}
 		mut exprs := []ast.Expr{}
@@ -172,7 +177,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 			p.next()
 		} else if p.tok.kind == .name && !(p.tok.lit == 'C' &&
 			p.peek_tok.kind == .dot) && (p.tok.lit in table.builtin_type_names || p.tok.lit[0].is_capital() ||
-			(p.peek_tok.kind == .dot && p.peek_tok2.lit[0].is_capital())) {
+			(p.peek_tok.kind == .dot && p.peek_tok2.lit.len > 0 && p.peek_tok2.lit[0].is_capital())) {
 			mut types := []table.Type{}
 			for {
 				// Sum type match
@@ -199,6 +204,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 				if p.tok.kind == .dotdot {
 					p.error_with_pos('match only supports inclusive (`...`) ranges, not exclusive (`..`)',
 						p.tok.position())
+					return ast.MatchExpr{}
 				} else if p.tok.kind == .ellipsis {
 					p.next()
 					expr2 := p.expr(0)
@@ -222,6 +228,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 		// p.warn('match block')
 		p.inside_match_body = true
 		stmts := p.parse_block_no_scope(false)
+		branch_scope := p.scope
 		p.close_scope()
 		p.inside_match_body = false
 		pos := token.Position{
@@ -238,6 +245,7 @@ fn (mut p Parser) match_expr() ast.MatchExpr {
 			comments: comments
 			is_else: is_else
 			post_comments: post_comments
+			scope: branch_scope
 		}
 		if p.tok.kind == .rcbr || (is_else && no_lcbr) {
 			break
@@ -283,10 +291,12 @@ fn (mut p Parser) select_expr() ast.SelectExpr {
 			if has_timeout {
 				p.error_with_pos('timeout `> t` and `else` are mutually exclusive `select` keys',
 					p.tok.position())
+				return ast.SelectExpr{}
 			}
 			if has_else {
 				p.error_with_pos('at most one `else` branch allowed in `select` block',
 					p.tok.position())
+				return ast.SelectExpr{}
 			}
 			is_else = true
 			has_else = true
@@ -295,10 +305,12 @@ fn (mut p Parser) select_expr() ast.SelectExpr {
 			if has_else {
 				p.error_with_pos('`else` and timeout `> t` are mutually exclusive `select` keys',
 					p.tok.position())
+				return ast.SelectExpr{}
 			}
 			if has_timeout {
 				p.error_with_pos('at most one timeout `> t` branch allowed in `select` block',
 					p.tok.position())
+				return ast.SelectExpr{}
 			}
 			is_timeout = true
 			has_timeout = true
@@ -318,6 +330,7 @@ fn (mut p Parser) select_expr() ast.SelectExpr {
 			exprs, comments := p.expr_list()
 			if exprs.len != 1 {
 				p.error('only one expression allowed as `select` key')
+				return ast.SelectExpr{}
 			}
 			if p.tok.kind in [.assign, .decl_assign] {
 				stmt = p.partial_assign_stmt(exprs, comments)
@@ -335,17 +348,20 @@ fn (mut p Parser) select_expr() ast.SelectExpr {
 				ast.ExprStmt {
 					if !stmt.is_expr {
 						p.error_with_pos('select: invalid expression', stmt.pos)
+						return ast.SelectExpr{}
 					} else {
 						match mut stmt.expr {
 							ast.InfixExpr {
 								if stmt.expr.op != .arrow {
 									p.error_with_pos('select key: `<-` operator expected',
 										stmt.expr.pos)
+									return ast.SelectExpr{}
 								}
 							}
 							else {
 								p.error_with_pos('select key: send expression (`ch <- x`) expected',
 									stmt.pos)
+								return ast.SelectExpr{}
 							}
 						}
 					}
@@ -357,16 +373,19 @@ fn (mut p Parser) select_expr() ast.SelectExpr {
 							if expr.op != .arrow {
 								p.error_with_pos('select key: `<-` operator expected',
 									expr.pos)
+								return ast.SelectExpr{}
 							}
 						}
 						else {
 							p.error_with_pos('select key: receive expression expected',
 								stmt.right[0].position())
+							return ast.SelectExpr{}
 						}
 					}
 				}
 				else {
 					p.error_with_pos('select: transmission statement expected', stmt.position())
+					return ast.SelectExpr{}
 				}
 			}
 		}

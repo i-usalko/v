@@ -10,27 +10,20 @@ import v.table
 import v.token
 import vweb.tmpl
 
-// #flag darwin -I.
-const (
-	supported_platforms  = ['windows', 'macos', 'darwin', 'linux', 'freebsd', 'openbsd', 'netbsd',
-		'dragonfly', 'android', 'js', 'solaris', 'haiku', 'linux_or_macos']
-	supported_ccompilers = ['tinyc', 'clang', 'mingw', 'msvc', 'gcc']
-)
-
 // // #include, #flag, #v
 fn (mut p Parser) hash() ast.HashStmt {
 	mut pos := p.prev_tok.position()
 	val := p.tok.lit
 	kind := val.all_before(' ')
 	p.next()
-	mut main := ''
+	mut main_str := ''
 	mut msg := ''
 	content := val.all_after('$kind ').all_before('//')
 	if content.contains(' #') {
-		main = content.all_before(' #').trim_space()
+		main_str = content.all_before(' #').trim_space()
 		msg = content.all_after(' #').trim_space()
 	} else {
-		main = content.trim_space()
+		main_str = content.trim_space()
 		msg = ''
 	}
 	// p.trace('a.v', 'kind: ${kind:-10s} | pos: ${pos:-45s} | hash: $val')
@@ -38,7 +31,7 @@ fn (mut p Parser) hash() ast.HashStmt {
 		mod: p.mod
 		val: val
 		kind: kind
-		main: main
+		main: main_str
 		msg: msg
 		pos: pos
 	}
@@ -51,12 +44,14 @@ fn (mut p Parser) vweb() ast.ComptimeCall {
 		n := p.check_name() // skip `vweb.html()` TODO
 		if n != 'vweb' {
 			p.error(error_msg)
+			return ast.ComptimeCall{}
 		}
 		p.check(.dot)
 	}
 	n := p.check_name() // (.name)
 	if n != 'html' && n != 'tmpl' {
 		p.error(error_msg)
+		return ast.ComptimeCall{}
 	}
 	is_html := n == 'html'
 	p.check(.lpar)
@@ -85,8 +80,10 @@ fn (mut p Parser) vweb() ast.ComptimeCall {
 		if !os.exists(path) {
 			if is_html {
 				p.error('vweb HTML template "$path" not found')
+				return ast.ComptimeCall{}
 			} else {
 				p.error('template file "$path" not found')
+				return ast.ComptimeCall{}
 			}
 		}
 		// println('path is now "$path"')
@@ -113,7 +110,7 @@ fn (mut p Parser) vweb() ast.ComptimeCall {
 		println('>>> end of vweb template END')
 		println('\n\n')
 	}
-	mut file := parse_text(v_code, p.table, p.pref, scope, p.global_scope)
+	mut file := parse_comptime(v_code, p.table, p.pref, scope, p.global_scope)
 	file = {
 		file |
 		path: tmpl_path
@@ -122,12 +119,13 @@ fn (mut p Parser) vweb() ast.ComptimeCall {
 	for stmt in file.stmts {
 		if stmt is ast.FnDecl {
 			if stmt.name == 'main.vweb_tmpl_$tmp_fn_name' {
-				mut tmpl_scope := file.scope.innermost(stmt.body_pos.pos)
+				// mut tmpl_scope := file.scope.innermost(stmt.body_pos.pos)
+				mut tmpl_scope := stmt.scope
 				for _, obj in p.scope.objects {
 					if obj is ast.Var {
 						mut v := obj
 						v.pos = stmt.body_pos
-						tmpl_scope.register(v.name, v)
+						tmpl_scope.register(v)
 						// set the controller action var to used
 						// if it's unused in the template it will warn
 						v.is_used = true
@@ -159,18 +157,19 @@ fn (mut p Parser) comp_for() ast.CompFor {
 	for_val := p.check_name()
 	mut kind := ast.CompForKind.methods
 	if for_val == 'methods' {
-		p.scope.register(val_var, ast.Var{
+		p.scope.register(ast.Var{
 			name: val_var
 			typ: p.table.find_type_idx('FunctionData')
 		})
 	} else if for_val == 'fields' {
-		p.scope.register(val_var, ast.Var{
+		p.scope.register(ast.Var{
 			name: val_var
 			typ: p.table.find_type_idx('FieldData')
 		})
 		kind = .fields
 	} else {
 		p.error('unknown kind `$for_val`, available are: `methods` or `fields`')
+		return ast.CompFor{}
 	}
 	spos := p.tok.position()
 	stmts := p.parse_block()

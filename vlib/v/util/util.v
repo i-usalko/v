@@ -9,12 +9,13 @@ import v.pref
 import v.vmod
 
 pub const (
-	v_version = '0.1.30'
+	v_version = '0.2.1'
 )
 
 // math.bits is needed by strconv.ftoa
 pub const (
 	builtin_module_parts = ['math.bits', 'strconv', 'strconv.ftoa', 'hash', 'strings', 'builtin']
+	bundle_modules       = ['clipboard', 'fontstash', 'gg', 'gx', 'sokol', 'ui']
 )
 
 pub const (
@@ -27,7 +28,7 @@ pub const (
 pub fn vhash() string {
 	mut buf := [50]byte{}
 	buf[0] = 0
-	unsafe {C.snprintf(charptr(buf), 50, '%s', C.V_COMMIT_HASH)}
+	unsafe { C.snprintf(charptr(buf), 50, '%s', C.V_COMMIT_HASH) }
 	return tos_clone(buf)
 }
 
@@ -71,9 +72,7 @@ pub fn githash(should_get_from_filesystem bool) string {
 				break
 			}
 			// 'ref: refs/heads/master' ... the current branch name
-			head_content := os.read_file(git_head_file) or {
-				break
-			}
+			head_content := os.read_file(git_head_file) or { break }
 			mut current_branch_hash := head_content
 			if head_content.starts_with('ref: ') {
 				gcbranch_rel_path := head_content.replace('ref: ', '').trim_space()
@@ -83,9 +82,7 @@ pub fn githash(should_get_from_filesystem bool) string {
 					break
 				}
 				// get the full commit hash contained in the ref heads file
-				branch_hash := os.read_file(gcbranch_file) or {
-					break
-				}
+				branch_hash := os.read_file(gcbranch_file) or { break }
 				current_branch_hash = branch_hash
 			}
 			desired_hash_length := 7
@@ -97,7 +94,7 @@ pub fn githash(should_get_from_filesystem bool) string {
 	}
 	mut buf := [50]byte{}
 	buf[0] = 0
-	unsafe {C.snprintf(charptr(buf), 50, '%s', C.V_CURRENT_COMMIT_HASH)}
+	unsafe { C.snprintf(charptr(buf), 50, '%s', C.V_CURRENT_COMMIT_HASH) }
 	return tos_clone(buf)
 }
 
@@ -128,8 +125,15 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 	set_vroot_folder(vroot)
 	tool_args := args_quote_paths(args)
 	tool_basename := os.real_path(os.join_path(vroot, 'cmd', 'tools', tool_name))
-	tool_exe := path_of_executable(tool_basename)
-	tool_source := tool_basename + '.v'
+	mut tool_exe := ''
+	mut tool_source := ''
+	if os.is_dir(tool_basename) {
+		tool_exe = path_of_executable(os.join_path(tool_basename, tool_name))
+		tool_source = os.join_path(tool_basename, tool_name + '.v')
+	} else {
+		tool_exe = path_of_executable(tool_basename)
+		tool_source = tool_basename + '.v'
+	}
 	tool_command := '"$tool_exe" $tool_args'
 	if is_verbose {
 		println('launch_tool vexe        : $vroot')
@@ -144,18 +148,14 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 	if should_compile {
 		emodules := external_module_dependencies_for_tool[tool_name]
 		for emodule in emodules {
-			check_module_is_installed(emodule, is_verbose) or {
-				panic(err)
-			}
+			check_module_is_installed(emodule, is_verbose) or { panic(err) }
 		}
 		mut compilation_command := '"$vexe" '
 		compilation_command += '"$tool_source"'
 		if is_verbose {
 			println('Compiling $tool_name with: "$compilation_command"')
 		}
-		tool_compilation := os.exec(compilation_command) or {
-			panic(err)
-		}
+		tool_compilation := os.exec(compilation_command) or { panic(err) }
 		if tool_compilation.exit_code != 0 {
 			eprintln('cannot compile `$tool_source`: \n$tool_compilation.output')
 			exit(1)
@@ -164,7 +164,7 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 	if is_verbose {
 		println('launch_tool running tool command: $tool_command ...')
 	}
-	exit(os.system(tool_command))
+	os.execvp(tool_exe, args)
 }
 
 // NB: should_recompile_tool/2 compares unix timestamps that have 1 second resolution
@@ -179,7 +179,10 @@ pub fn should_recompile_tool(vexe string, tool_source string) bool {
 	if !os.exists(tool_exe) {
 		should_compile = true
 	} else {
-		if os.file_last_mod_unix(tool_exe) <= os.file_last_mod_unix(vexe) {
+		mtime_vexe := os.file_last_mod_unix(vexe)
+		mtime_tool_exe := os.file_last_mod_unix(tool_exe)
+		mtime_tool_source := os.file_last_mod_unix(tool_source)
+		if mtime_tool_exe <= mtime_vexe {
 			// v was recompiled, maybe after v up ...
 			// rebuild the tool too just in case
 			should_compile = true
@@ -192,9 +195,18 @@ pub fn should_recompile_tool(vexe string, tool_source string) bool {
 				should_compile = false
 			}
 		}
-		if os.file_last_mod_unix(tool_exe) <= os.file_last_mod_unix(tool_source) {
+		if mtime_tool_exe <= mtime_tool_source {
 			// the user changed the source code of the tool, or git updated it:
 			should_compile = true
+		}
+		// GNU Guix and possibly other environments, have bit for bit reproducibility in mind,
+		// including filesystem attributes like modification times, so they set the modification
+		// times of executables to a small number like 0, 1 etc. In this case, we should not
+		// recompile even if other heuristics say that we should. Users in such environments,
+		// have to explicitly do: `v cmd/tools/vfmt.v`, and/or install v from source, and not
+		// use the system packaged one, if they desire to develop v itself.
+		if mtime_vexe < 1024 && mtime_tool_exe < 1024 {
+			should_compile = false
 		}
 	}
 	return should_compile
@@ -227,9 +239,7 @@ pub fn path_of_executable(path string) string {
 }
 
 pub fn read_file(file_path string) ?string {
-	raw_text := os.read_file(file_path) or {
-		return error('failed to open $file_path')
-	}
+	raw_text := os.read_file(file_path) or { return error('failed to open $file_path') }
 	return skip_bom(raw_text)
 }
 
@@ -356,9 +366,7 @@ pub fn ensure_modules_for_all_tools_are_installed(is_verbose bool) {
 			eprintln('Installing modules for tool: $tool_name ...')
 		}
 		for emodule in tool_modules {
-			check_module_is_installed(emodule, is_verbose) or {
-				panic(err)
-			}
+			check_module_is_installed(emodule, is_verbose) or { panic(err) }
 		}
 	}
 }
@@ -419,4 +427,8 @@ pub fn recompile_file(vexe string, file string) {
 		eprintln('could not recompile $file')
 		exit(2)
 	}
+}
+
+pub fn should_bundle_module(mod string) bool {
+	return mod in bundle_modules || (mod.contains('.') && mod.all_before('.') in bundle_modules)
 }

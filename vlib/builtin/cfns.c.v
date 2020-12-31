@@ -1,7 +1,7 @@
 module builtin
 
 // <string.h>
-fn C.memcpy(byteptr, byteptr, int) voidptr
+fn C.memcpy(dest byteptr, src byteptr, n int) voidptr
 
 fn C.memcmp(byteptr, byteptr, int) int
 
@@ -235,7 +235,7 @@ fn C.WideCharToMultiByte() int
 
 fn C._wstat()
 
-fn C._wrename()
+fn C._wrename() int
 
 fn C._wfopen() voidptr
 

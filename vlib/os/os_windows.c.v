@@ -78,7 +78,7 @@ mut:
 fn init_os_args_wide(argc int, argv &byteptr) []string {
 	mut args := []string{}
 	for i in 0 .. argc {
-		args << string_from_wide(unsafe {&u16(argv[i])})
+		args << string_from_wide(unsafe { &u16(argv[i]) })
 	}
 	return args
 }
@@ -143,9 +143,7 @@ pub fn mkdir(path string) ?bool {
 // Ref - https://docs.microsoft.com/en-us/cpp/c-runtime-library/reference/get-osfhandle?view=vs-2019
 // get_file_handle retrieves the operating-system file handle that is associated with the specified file descriptor.
 pub fn get_file_handle(path string) HANDLE {
-	cfile := vfopen(path, 'rb') or {
-		return HANDLE(invalid_handle_value)
-	}
+	cfile := vfopen(path, 'rb') or { return HANDLE(invalid_handle_value) }
 	handle := HANDLE(C._get_osfhandle(fileno(cfile))) // CreateFile? - hah, no -_-
 	return handle
 }
@@ -341,7 +339,7 @@ pub:
 	context_record   &ContextRecord
 }
 
-pub type VectoredExceptionHandler = fn ( &ExceptionPointers) u32
+pub type VectoredExceptionHandler = fn (&ExceptionPointers) u32
 
 // This is defined in builtin because we use vectored exception handling
 // for our unhandled exception handler on windows

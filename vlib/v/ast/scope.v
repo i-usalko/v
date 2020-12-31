@@ -121,7 +121,14 @@ pub fn (mut s Scope) register_struct_field(field ScopeStructField) {
 	s.struct_fields << field
 }
 
-pub fn (mut s Scope) register(name string, obj ScopeObject) {
+pub fn (mut s Scope) register(obj ScopeObject) {
+	name := if obj is ConstField {
+		obj.name
+	} else if obj is GlobalField {
+		obj.name
+	} else {
+		(obj as Var).name
+	}
 	if name == '_' {
 		return
 	}
@@ -174,7 +181,7 @@ fn (s &Scope) contains(pos int) bool {
 	return pos >= s.start_pos && pos <= s.end_pos
 }
 
-pub fn (sc &Scope) show(depth int, max_depth int) string {
+pub fn (sc Scope) show(depth int, max_depth int) string {
 	mut out := ''
 	mut indent := ''
 	for _ in 0 .. depth * 4 {
@@ -199,7 +206,7 @@ pub fn (sc &Scope) show(depth int, max_depth int) string {
 	return out
 }
 
-pub fn (sc &Scope) str() string {
+pub fn (sc Scope) str() string {
 	return sc.show(0, 0)
 }
 

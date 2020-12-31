@@ -77,7 +77,9 @@ pub mut:
 	show_c_output       bool // -show-c-output, print all cc output even if the code was compiled correctly
 	// NB: passing -cg instead of -g will set is_vlines to false and is_debug to true, thus making v generate cleaner C files,
 	// which are sometimes easier to debug / inspect manually than the .tmp.c files by plain -g (when/if v line number generation breaks).
-	use_cache           bool // turns on v usage of the module cache to speed up compilation.
+	// use cached modules to speed up compilation.
+	use_cache           bool // = true
+	retry_compilation   bool = true
 	is_stats            bool // `v -stats file_test.v` will produce more detailed statistics for the tests that were run
 	no_auto_free        bool // `v -nofree` disable automatic `free()` insertion for better performance in some applications  (e.g. compilers)
 	// TODO Convert this into a []string
@@ -85,6 +87,7 @@ pub mut:
 	// For example, passing -cflags -Os will cause the C compiler to optimize the generated binaries for size.
 	// You could pass several -cflags XXX arguments. They will be merged with each other.
 	// You can also quote several options at the same time: -cflags '-Os -fno-inline-small-functions'.
+	m64                 bool // true = generate 64-bit code, defaults to x64
 	ccompiler           string // the name of the C compiler used
 	ccompiler_type      CompilerType // the type of the C compiler used
 	third_party_option  string
@@ -96,7 +99,6 @@ pub mut:
 	// This is on by default, since a vast majority of users do not
 	// work on the builtin module itself.
 	// generating_vh    bool
-	fast                bool // use tcc/x64 codegen
 	enable_globals      bool // allow __global for low level code
 	is_fmt              bool
 	is_vet              bool
@@ -119,8 +121,10 @@ pub mut:
 	printfn_list        []string // a list of generated function names, whose source should be shown, for debugging
 	print_v_files       bool // when true, just print the list of all parsed .v files then stop.
 	skip_running        bool // when true, do no try to run the produced file (set by b.cc(), when -o x.c or -o x.js)
-	skip_warnings       bool // like C's "-w"
+	skip_warnings       bool // like C's "-w", forces warnings to be ignored.
+	warn_impure_v       bool // -Wimpure-v, force a warning for JS.fn()/C.fn(), outside of .js.v/.c.v files. TODO: turn to an error by default
 	warns_are_errors    bool // -W, like C's "-Werror", treat *every* warning is an error
+	fatal_errors        bool // unconditionally exit after the first error with exit(1)
 	reuse_tmpc          bool // do not use random names for .tmp.c and .tmp.c.rsp files, and do not remove them
 	use_color           ColorOutput // whether the warnings/errors should use ANSI color escapes.
 	is_parallel         bool
@@ -138,6 +142,9 @@ pub mut:
 
 pub fn parse_args(args []string) (&Preferences, string) {
 	mut res := &Preferences{}
+	$if x64 {
+		res.m64 = true // follow V model by default
+	}
 	mut command := ''
 	mut command_pos := 0
 	// for i, arg in args {
@@ -166,6 +173,12 @@ pub fn parse_args(args []string) (&Preferences, string) {
 			}
 			'-progress' {
 				// processed by testing tools in cmd/tools/modules/testing/common.v
+			}
+			'-Wimpure-v' {
+				res.warn_impure_v = true
+			}
+			'-Wfatal-errors' {
+				res.fatal_errors = true
 			}
 			'-silent' {
 				res.output_mode = .silent
@@ -207,12 +220,15 @@ pub fn parse_args(args []string) (&Preferences, string) {
 				res.is_bare = true
 				res.build_options << arg
 			}
+			'-no-retry-compilation' {
+				res.retry_compilation = false
+			}
 			'-no-preludes' {
 				res.no_preludes = true
 				res.build_options << arg
 			}
 			'-prof', '-profile' {
-				res.profile_file = cmdline.option(current_args, '-profile', '-')
+				res.profile_file = cmdline.option(current_args, arg, '-')
 				res.is_prof = true
 				res.build_options << '$arg $res.profile_file'
 				i++
@@ -222,6 +238,10 @@ pub fn parse_args(args []string) (&Preferences, string) {
 			}
 			'-prod' {
 				res.is_prod = true
+				res.build_options << arg
+			}
+			'-sanitize' {
+				res.sanitize = true
 				res.build_options << arg
 			}
 			'-simulator' {
@@ -239,6 +259,10 @@ pub fn parse_args(args []string) (&Preferences, string) {
 			'-color' {
 				res.use_color = .always
 			}
+			'-m32', '-m64' {
+				res.m64 = arg[2] == `6`
+				res.cflags += ' $arg'
+			}
 			'-nocolor' {
 				res.use_color = .never
 			}
@@ -253,6 +277,9 @@ pub fn parse_args(args []string) (&Preferences, string) {
 			}
 			'-usecache' {
 				res.use_cache = true
+			}
+			'-nocache' {
+				res.use_cache = false
 			}
 			'-prealloc' {
 				res.prealloc = true
@@ -320,14 +347,15 @@ pub fn parse_args(args []string) (&Preferences, string) {
 				if res.out_name.ends_with('.js') {
 					res.backend = .js
 				}
+				if !os.is_abs_path(res.out_name) {
+					res.out_name = os.join_path(os.getwd(), res.out_name)
+				}
 				i++
 			}
 			'-b' {
 				sbackend := cmdline.option(current_args, '-b', 'c')
 				res.build_options << '$arg $sbackend'
-				b := backend_from_string(sbackend) or {
-					continue
-				}
+				b := backend_from_string(sbackend) or { continue }
 				res.backend = b
 				i++
 			}
@@ -356,6 +384,10 @@ pub fn parse_args(args []string) (&Preferences, string) {
 				i++
 			}
 			else {
+				if command == 'build' && (arg.ends_with('.v') || os.exists(command)) {
+					eprintln('Use `v $arg` instead.')
+					exit(1)
+				}
 				if arg[0] == `-` {
 					if arg[1..] in list_of_flags_with_param {
 						// skip parameter
@@ -366,6 +398,9 @@ pub fn parse_args(args []string) (&Preferences, string) {
 					if command == '' {
 						command = arg
 						command_pos = i
+						if command == 'run' {
+							break
+						}
 					}
 					continue
 				}
@@ -374,7 +409,7 @@ pub fn parse_args(args []string) (&Preferences, string) {
 					command_pos = i
 					continue
 				}
-				if command !in ['', 'build', 'build-module'] {
+				if command !in ['', 'build-module'] {
 					// arguments for e.g. fmt should be checked elsewhere
 					continue
 				}
@@ -388,19 +423,13 @@ pub fn parse_args(args []string) (&Preferences, string) {
 			}
 		}
 	}
+	// res.use_cache = true
 	if command != 'doc' && res.out_name.ends_with('.v') {
 		eprintln('Cannot save output binary in a .v file.')
 		exit(1)
 	}
 	if command.ends_with('.v') || os.exists(command) {
 		res.path = command
-	} else if command == 'build' {
-		if command_pos + 2 != args.len {
-			eprintln('`v build` requires exactly one argument - either a single .v file, or a single folder/ containing several .v files')
-			exit(1)
-		}
-		res.path = args[command_pos + 1]
-		must_exist(res.path)
 	} else if command == 'run' {
 		res.is_run = true
 		if command_pos + 2 > args.len {
@@ -469,7 +498,7 @@ pub fn parse_args(args []string) (&Preferences, string) {
 	return res, command
 }
 
-fn (pref &Preferences) vrun_elog(s string) {
+pub fn (pref &Preferences) vrun_elog(s string) {
 	if pref.is_verbose {
 		eprintln('> v run -, $s')
 	}
@@ -521,6 +550,7 @@ pub fn cc_from_string(cc_str string) CompilerType {
 
 fn parse_define(mut prefs Preferences, define string) {
 	define_parts := define.split('=')
+	prefs.build_options << '-d $define'
 	if define_parts.len == 1 {
 		prefs.compile_defines << define
 		prefs.compile_defines_all << define

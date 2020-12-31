@@ -14,6 +14,16 @@ struct TestItem {
 
 const(
 match_test_suite = [
+	// base OR
+	TestItem{"a",r"a|b",0,1},
+	TestItem{"a",r"b|a",0,1},
+	TestItem{"b",r"a|b",0,1},
+	TestItem{"b",r"b|a",0,1},
+	TestItem{"c",r"b|a",-1,0},
+
+	// test base
+	TestItem{"[ciao]",r"(.)ciao(.)",0,6},
+	TestItem{"[ciao] da me",r"(.)ciao(.)",0,6},
 
 	// positive
 	TestItem{"this is a good.",r"this",0,4},
@@ -38,7 +48,7 @@ match_test_suite = [
 	TestItem{"this these those ",r"(th[eio]se? ?)+",0,17},
 	TestItem{"this these those ",r"(th[eio]se? )+",0,17},
 	TestItem{"this,these,those. over",r"(th[eio]se?[,. ])+",0,17},
-	TestItem{"soday,this,these,those. over",r"(th[eio]se?[,. ])+",6,23},
+	TestItem{"soday,this,these,those. over",r".+(th[eio]se?[,. ])+",0,23},
 
 	TestItem{"cpapaz",r"(c(pa)+z)",0,6},
 	TestItem{"this is a cpapaz over",r"(c(pa)+z)",10,16},
@@ -60,7 +70,7 @@ match_test_suite = [
 	TestItem{"soday,this,these,those. over",r".*,(th[eio]se?[,. ])+",0,23},
 	TestItem{"soday,this,these,thesa.thesi over",r".*,(th[ei]se?[,. ])+(thes[ai][,. ])+",0,29},
 	TestItem{"cpapaz ole. pippo,",r".*(c(pa)+z)(\s+\a+[\.,]?)+",0,18},
-	TestItem{"cpapaz ole. pippo",r".*(c(pa)+z)(\s+\a+[\.,]?)+",0,17},
+	TestItem{"cpapaz ole. pippo",r"(c(pa)+z)(\s+\a+[\.,]?)+",0,17},
 	TestItem{"cpapaz ole. pippo, 852",r".*(c(pa)+z)(\s+\a+[\.,]?)+",0,18},
 	TestItem{"123cpapaz ole. pippo",r".*(c(pa)+z)(\s+\a+[\.,]?)+",0,20},
 	TestItem{"...cpapaz ole. pippo",r".*(c(pa)+z)(\s+\a+[\.,]?)+",0,20},
@@ -73,7 +83,6 @@ match_test_suite = [
 	TestItem{" abb",r"\s(.*)",0,4},
 
 	TestItem{"/home/us_er/pippo/info-01.txt", r"(/?[-\w_]+)*\.txt$",0,29}
-
 
 	// negative
 	TestItem{"zthis ciao",r"((t[hieo]+se?)\s*)+",-1,0},
@@ -88,28 +97,51 @@ match_test_suite = [
 	// check unicode
 	TestItem{"this is a Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ Ⅵ test",r".*a [Ⅰ-Ⅵ ]+",0,34},
 	TestItem{"123Ⅰ Ⅱ Ⅲ Ⅳ Ⅴ Ⅵ test",r"[Ⅰ-Ⅴ\s]+",3,23},
-]
-)
 
-struct TestItemFa {
-	src string
-	q string
-	r []int
-}
+	// new edge cases
+	TestItem{"12345678", r"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]",-1,0},
+	TestItem{"12345678", r"[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]",0,8},
+	TestItem{"123456789", r"^[0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9][0-9]$",0,9}
+	TestItem{"12345678", r"^\d{8}$",0,8},
+	TestItem{"12345678", r"^\d{7}$",-1,0},
+	TestItem{"12345678", r"^\d{9}$",-1,0},
+	
+	TestItem{"eth", r"(oth)|(eth)",0,3},
+	TestItem{"et", r"(oth)|(eth)",-1,0},
+	TestItem{"et", r".*(oth)|(eth)",-1,0},
+	TestItem{"peoth", r".*(ith)|(eth)",-1,0},
 
-const (
-match_test_suite_fa = [
-	// find_all tests
-	TestItemFa{
-		"oggi pippo è andato a casa di pluto ed ha trovato pippo",
-		r"p[iplut]+o",
-		[5, 10, 31, 36, 51, 56]
-	},
-	TestItemFa{
-		"oggi pibao è andato a casa di pbababao ed ha trovato pibabababao",
-		r"(pi?(ba)+o)",
-		[5, 10, 31, 39, 54, 65]
-	},
+	TestItem{"poth", r"(eth)|(oth)",1,4},
+	TestItem{"poth", r"(oth)|(eth)",1,4},
+	TestItem{"poth", r".(oth)|(eth)$",0,4},
+	TestItem{"poth", r"^.(oth)|(eth)$",0,4},
+	TestItem{"poth", r"^\w+$",0,4},
+
+	// test dot_char
+	TestItem{"8-11 l: qllllqllklhlvtl", r"^(\d+)-(\d+) ([a-z]): (.*)$",0,23},
+	TestItem{"accccb deer", r"^a(.*)b d(.+)r",0,11},
+	TestItem{"accccb deer", r"^a(.*)b d(.+)",0,11},
+	TestItem{"accccb deer", r"^(.*)$",0,11},
+	TestItem{"accccb deer", r"^a(.*)b d(.+)p",-1,0},
+	TestItem{"##.#....#.##.####...#.##", r".{18}[.#]",0,19},
+
+	// test bcksls chars
+	TestItem{"[ an s. s! ]( wi4ki:something )", r"\[.*\]\( *(\w*:*\w+) *\)",0,31},
+	TestItem{"[ an s. s! ](wiki:something)", r"\[.*\]\( *(\w*:*\w+) *\)",0,28},
+	
+	// Crazywulf tests (?:^|[()])(\d+)(*)(\d+)(?:$|[()])
+    TestItem{"1*1", r"(\d+)([*])(\d+)",0,3},
+    TestItem{"+1*1", r"^(\d+)([*])(\d+)",-1,0},
+    TestItem{"*1*1", r"(?:^|[*])(\d+)([*])(\d+)",0,4},
+    TestItem{"*1*1", r"(?:^|[*()])(\d+)([*])(\d+)",0,4},
+    TestItem{")1*1", r"(?:^|[*()])(\d+)([*])(\d+)",0,4},
+    TestItem{"(1*1", r"(?:^|[*()])(\d+)([*])(\d+)",0,4},
+    TestItem{"*1*1(", r"(?:^|[*()])(\d+)([*])(\d+)(?:$|[*()])",0,5},
+    TestItem{" 1*1(", r"(?:^|[*()])(\d+)([*])(\d+)(?:$|[*()])",-1,0},
+    TestItem{"1*1 ", r"(?:^|[*()])(\d+)([*])(\d+)(?:$|[*()])",-1,0},
+
+    // particular groups
+    TestItem{"ababababac", r"ab(.*)(ac)",0,10},
 
 ]
 )
@@ -121,7 +153,7 @@ struct TestItemRe {
 	r string
 }
 const (
-match_test_suite_re = [
+match_test_suite_replace = [
 	// replace tests
 	TestItemRe{
 		"oggi pibao è andato a casa di pbababao ed ha trovato pibabababao",
@@ -143,37 +175,114 @@ struct TestItemCGroup {
 	q string
 	s int
 	e int
-	cg []int
+	cg []int // [number of items (3*# item), id_group_0, start_0, end_0, id_group_1, start1, start2,... ]
 	cgn map[string]int
 }
 const (
 cgroups_test_suite = [
 	TestItemCGroup{
 		"http://www.ciao.mondo/hello/pippo12_/pera.html",
-		r"(?P<format>https?)|(?:ftps?)://(?P<token>[\w_]+.)+",0,46,
-		[8, 0, 0, 4, 1, 7, 11, 1, 11, 16, 1, 16, 22, 1, 22, 28, 1, 28, 37, 1, 37, 42, 1, 42, 46],
+		r"(?P<format>https?)|(?:ftps?)://(?P<token>[\w_]+[\.|/])+",0,42,
+		[7, 0, 0, 4, 1, 7, 11, 1, 11, 16, 1, 16, 22, 1, 22, 28, 1, 28, 37, 1, 37, 42],
 		{'format':int(0),'token':1}
 	},
 	TestItemCGroup{
 		"http://www.ciao.mondo/hello/pippo12_/pera.html",
 		r"(?P<format>https?)|(?P<format>ftps?)://(?P<token>[\w_]+.)+",0,46,
-		[8, 0, 0, 4, 1, 7, 11, 1, 11, 16, 1, 16, 22, 1, 22, 28, 1, 28, 37, 1, 37, 42, 1, 42, 46],
+		[8, 0, 0, 4, 1, 7, 11, 1, 11, 16, 1, 16, 22, 1, 22, 28, 1, 28, 37, 1, 37, 42, 1, 42, 46]
+		//[8, 0, 0, 4, 1, 7, 10, 1, 11, 15, 1, 16, 21, 1, 22, 27, 1, 28, 36, 1, 37, 41, 1, 42, 46],		
 		{'format':int(0),'token':1}
 	},
 	TestItemCGroup{
 		"http://www.ciao.mondo/hello/pippo12_/pera.html",
-		r"(?P<format>https?)|(?P<format>ftps?)://([\w_]+.)+",0,46,
-		[8, 0, 0, 4, 1, 7, 11, 1, 11, 16, 1, 16, 22, 1, 22, 28, 1, 28, 37, 1, 37, 42, 1, 42, 46],
+		r"(?P<format>https?)|(?P<format>ftps?)://([\w_]+\.)+",0,16,
+		[3, 0, 0, 4, 1, 7, 11, 1, 11, 16],
 		{'format':int(0)}
 	},
+	TestItemCGroup{
+		"acc +13 pippo",
+		r"(\w+)\s(.)([0-9]+) \w+",0,13,
+		[0, 3, 4, 5, 5, 7],
+		map[string]int{}
+	},
+	TestItemCGroup{
+		"acc +13",
+		r"(\w+)\s(.)([0-9]+)",0,7,
+		[0, 3, 4, 5, 5, 7],
+		map[string]int{}
+	},
+	TestItemCGroup{
+		"ababababac",
+		r"ab(.*)(ac)",0,10,
+		[2, 8, 8, 10],
+		map[string]int{}
+	},
 ]
+)
+
+
+struct Test_find_all {
+	src string
+	q string
+	res []int // [0,4,5,6...] 
+	res_str []string // ['find0','find1'...]
+}
+const (
+find_all_test_suite = [
+	Test_find_all{
+		"abcd 1234 efgh 1234 ghkl1234 ab34546df",
+		r"\d+",
+		[5, 9, 15, 19, 24, 28, 31, 36],
+		['1234', '1234', '1234', '34546']
+	},
+	Test_find_all{
+		"abcd 1234 efgh 1234 ghkl1234 ab34546df",
+		r"\a+",
+		[0, 4, 10, 14, 20, 24, 29, 31, 36, 38],
+		['abcd', 'efgh', 'ghkl', 'ab', 'df']
+	},
+	Test_find_all{
+		"oggi pippo è andato a casa di pluto ed ha trovato pippo",
+		r"p[iplut]+o",
+		[5, 10, 31, 36, 51, 56],
+		['pippo', 'pluto', 'pippo']
+	},
+	Test_find_all{
+		"oggi pibao è andato a casa di pbababao ed ha trovato pibabababao",
+		r"(pi?(ba)+o)",
+		[5, 10, 31, 39, 54, 65],
+		['pibao', 'pbababao', 'pibabababao']
+	},
+	Test_find_all{
+		"Today is a good day and tomorrow will be for sure.",
+		r"[Tt]o\w+",
+		[0, 5, 24, 32],
+		['Today', 'tomorrow']
+	},
+	Test_find_all{
+		"pera\nurl = https://github.com/dario/pig.html\npippo",
+		r"url *= *https?://[\w./]+",
+		[5, 44],
+		['url = https://github.com/dario/pig.html']
+	},
+	Test_find_all{
+		"pera\nurl = https://github.com/dario/pig.html\npippo",
+		r"url *= *https?://.*"+'\n',
+		[5, 45],
+		['url = https://github.com/dario/pig.html\n']
+	}
+]
+)
+
+const (
+	debug = false // true for debug println 
 )
 
 fn test_regex(){
 	// check capturing groups
 	for c,to in cgroups_test_suite {
 		// debug print
-		//println("#$c [$to.src] q[$to.q] ($to.s, $to.e)")
+		if debug { println("#$c [$to.src] q[$to.q] ($to.s, $to.e)") }
 
 		mut re := regex.regex_opt(to.q) or {
 			eprintln('err: $err')
@@ -181,7 +290,13 @@ fn test_regex(){
 			continue
 		}
 
-		re.group_csave = [-1].repeat(3*20+1)
+		if to.cgn.len > 0 {
+			re.group_csave_flag = true
+			//re.group_csave = [-1].repeat(3*20+1)
+			if debug { println("continuous save")}
+		} else {
+			if debug { println("NO continuous save")}
+		}
 
 		start, end := re.match_string(to.src)
 
@@ -191,43 +306,59 @@ fn test_regex(){
 		}
 
 		if start != to.s || end != to.e {
-			println("#$c [$to.src] q[$to.q] res[$tmp_str] $start, $end")
-			println("ERROR!")
+			//println("#$c [$to.src] q[$to.q] res[$tmp_str] $start, $end")
+			eprintln("ERROR!")
 			//C.printf("ERROR!! res:(%d, %d) refh:(%d, %d)\n",start, end, to.s, to.e)
 			assert false
 			continue
-		}
+		}	
 
 		// check cgroups
-		if re.group_csave.len == 0 || re.group_csave[0] != to.cg[0] {
-			println("Capturing group len error!")
-			assert false
-			continue
-		}
-
-		// check captured groups
-		mut ln := re.group_csave[0]*3
-		for ln > 0 {
-			if re.group_csave[ln] != to.cg[ln] {
-				assert false
-			}
-			ln--
-		}
-
-		// check named captured groups
-		for k in to.cgn.keys() {
-			if to.cgn[k] != (re.group_map[k]-1) { // we have -1 because the map not found is 0, in groups we start from 0 and we store using +1
-				println("Named capturing group error! [$k]")
+		if to.cgn.len > 0 {
+			if re.group_csave.len == 0 || re.group_csave[0] != to.cg[0] {
+				eprintln("Capturing group len error! found: ${re.group_csave[0]} true ground: ${to.cg[0]}")
 				assert false
 				continue
 			}
+
+			// check captured groups
+			mut ln := re.group_csave[0]*3
+			for ln > 0 {
+				if re.group_csave[ln] != to.cg[ln] {
+					eprintln("Capturing group failed on $ln item!")
+					assert false
+				}
+				ln--
+			}
+
+			// check named captured groups
+			for k in to.cgn.keys() {
+				if to.cgn[k] != (re.group_map[k]-1) { // we have -1 because the map not found is 0, in groups we start from 0 and we store using +1
+					eprintln("Named capturing group error! [$k]")
+					assert false
+					continue
+				}
+			}
+		} else {
+			// check normal captured groups
+			if re.groups.len != to.cg.len {
+				assert false
+			}
+			for ln:=0; ln < re.groups.len; ln++ {
+				if re.groups[ln] != to.cg[ln] {
+					eprintln("Capture group doesn't match:")
+					eprintln("true ground: [${to.cg}]")
+					eprintln("elaborated : [${re.groups}]")
+					assert false
+				}
+			} 
 		}
 	}
 
 	// check find_all
-	for _,to in match_test_suite_fa{
+	for c,to in find_all_test_suite {
 		// debug print
-		//println("#$c [$to.src] q[$to.q] $to.r")
+		if debug { println("#$c [$to.src] q[$to.q] ($to.res, $to.res_str)") }
 
 		mut re := regex.regex_opt(to.q) or {
 			eprintln('err: $err')
@@ -235,27 +366,26 @@ fn test_regex(){
 			continue
 		}
 
+		re.reset()
 		res := re.find_all(to.src)
-		if res.len != to.r.len {
-			println("ERROR: find_all, array of different size.")
+		if res != to.res {
+			eprintln('err: find_all !!')
+			if debug { println("#$c exp: $to.res calculated: $res") }
 			assert false
-			continue
 		}
 
-		for c1,i in res {
-			if i != to.r[c1] {
-				println("ERROR: find_all, different indexes.")
-				assert false
-				continue
-			}
+		res_str := re.find_all_str(to.src)
+		if res_str != to.res_str {
+			eprintln('err: find_all_str !!')
+			if debug { println("#$c exp: $to.res_str calculated: $res_str") }
+			assert false
 		}
-
 	}
 
 	// check replace
-	for _,to in match_test_suite_re{
+	for c,to in match_test_suite_replace{
 		// debug print
-		//println("#$c [$to.src] q[$to.q] $to.r")
+		if debug { println("#$c [$to.src] q[$to.q] $to.r") }
 
 		mut re := regex.regex_opt(to.q) or {
 			eprintln('err: $err')
@@ -265,7 +395,7 @@ fn test_regex(){
 
 		res := re.replace(to.src,to.rep)
 		if res != to.r {
-			println("ERROR: replace.")
+			eprintln("ERROR: replace.")
 			assert false
 			continue
 		}
@@ -274,7 +404,7 @@ fn test_regex(){
 	// check match and find
 	for c,to in match_test_suite {
 		// debug print
-		println("#$c [$to.src] q[$to.q] $to.s $to.e")
+		if debug { println("#$c [$to.src] q[$to.q] $to.s $to.e") }
 
 		// test the find
 		if to.s > 0 {
@@ -284,12 +414,12 @@ fn test_regex(){
 				continue
 			}
 			// q_str := re.get_query()
-			// println("Query: $q_str")
+			// eprintln("Query: $q_str")
 			start,end := re.find(to.src)
 
 			if start != to.s || end != to.e {
 				err_str := re.get_parse_error_string(start)
-				println("ERROR : $err_str")
+				eprintln("ERROR : $err_str start: ${start} end: ${end}")
 				assert false
 			} else {
 				//tmp_str := text[start..end]
@@ -317,8 +447,8 @@ fn test_regex(){
 		}
 
 		if start != to.s || end != to.e {
-			println("#$c [$to.src] q[$to.q] res[$tmp_str] $start, $end")
-			println("ERROR!")
+			eprintln("#$c [$to.src] q[$to.q] res[$tmp_str] $start, $end")
+			eprintln("ERROR!")
 			//C.printf("ERROR!! res:(%d, %d) refh:(%d, %d)\n",start, end, to.s, to.e)
 			assert false
 			continue
@@ -328,10 +458,13 @@ fn test_regex(){
 		tmp_str1 := to.src.clone()
 		start1, end1 := re.match_string(tmp_str1)
 		if start1 != start || end1 != end {
-			println("two run ERROR!!")
+			eprintln("two run ERROR!!")
 			assert false
 			continue
 		}
 
 	}
+	if debug { println("DONE!") }
+
 }
+

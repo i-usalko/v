@@ -25,39 +25,40 @@ pub type FNChar = fn (c u32, x voidptr)
 
 pub struct Config {
 pub:
-	width             int
-	height            int
-	use_ortho         bool
-	retina            bool
-	resizable         bool
-	user_data         voidptr
-	font_size         int
-	create_window     bool
+	width                 int
+	height                int
+	use_ortho             bool
+	retina                bool
+	resizable             bool
+	user_data             voidptr
+	font_size             int
+	create_window         bool
 	// window_user_ptr voidptr
-	window_title      string
-	borderless_window bool
-	always_on_top     bool
-	bg_color          gx.Color
-	init_fn           FNCb = voidptr(0)
-	frame_fn          FNCb = voidptr(0)
-	cleanup_fn        FNCb = voidptr(0)
-	fail_fn           FNFail = voidptr(0)
-	event_fn          FNEvent = voidptr(0)
-	keydown_fn        FNKeyDown = voidptr(0)
+	window_title          string
+	borderless_window     bool
+	always_on_top         bool
+	bg_color              gx.Color
+	init_fn               FNCb = voidptr(0)
+	frame_fn              FNCb = voidptr(0)
+	cleanup_fn            FNCb = voidptr(0)
+	fail_fn               FNFail = voidptr(0)
+	event_fn              FNEvent = voidptr(0)
+	keydown_fn            FNKeyDown = voidptr(0)
 	// special case of event_fn
-	char_fn           FNChar = voidptr(0)
+	char_fn               FNChar = voidptr(0)
 	// special case of event_fn
-	move_fn           FNMove = voidptr(0)
+	move_fn               FNMove = voidptr(0)
 	// special case of event_fn
-	click_fn          FNMove = voidptr(0)
+	click_fn              FNMove = voidptr(0)
 	// special case of event_fn
 	// wait_events       bool // set this to true for UIs, to save power
-	fullscreen        bool
-	scale             f32 = 1.0
+	fullscreen            bool
+	scale                 f32 = 1.0
 	// vid needs this
 	// init_text bool
-	font_path         string
-	ui_mode           bool
+	font_path             string
+	custom_bold_font_path string
+	ui_mode               bool // refreshes only on events to save CPU usage
 }
 
 pub struct Context {
@@ -120,18 +121,28 @@ fn gg_init_sokol_window(user_data voidptr) {
 	exists := $if !android { os.is_file(g.config.font_path) } $else { true }
 	if g.config.font_path != '' && exists {
 		// t := time.ticks()
-		g.ft = new_ft({
+		g.ft = new_ft(
 			font_path: g.config.font_path
+			custom_bold_font_path: g.config.custom_bold_font_path
 			scale: sapp.dpi_scale()
-		}) or {
-			panic(err)
-		}
+		) or { panic(err) }
 		// println('FT took ${time.ticks()-t} ms')
 		g.font_inited = true
+	} else {
+		if !exists {
+			sfont := system_font_path()
+			eprintln('font file "$g.config.font_path" does not exist, the system font was used instead.')
+			g.ft = new_ft(
+				font_path: sfont
+				custom_bold_font_path: g.config.custom_bold_font_path
+				scale: sapp.dpi_scale()
+			) or { panic(err) }
+			g.font_inited = true
+		}
 	}
 	//
 	mut pipdesc := C.sg_pipeline_desc{}
-	unsafe {C.memset(&pipdesc, 0, sizeof(pipdesc))}
+	unsafe { C.memset(&pipdesc, 0, sizeof(pipdesc)) }
 	pipdesc.blend.enabled = true
 	pipdesc.blend.src_factor_rgb = C.SG_BLENDFACTOR_SRC_ALPHA
 	pipdesc.blend.dst_factor_rgb = C.SG_BLENDFACTOR_ONE_MINUS_SRC_ALPHA
@@ -577,6 +588,14 @@ pub fn (ctx &Context) draw_empty_rounded_rect(x f32, y f32, w f32, h f32, radius
 	}
 	sgl.v2f(lx + xx, ly)
 	sgl.end()
+}
+
+pub fn screen_size() Size {
+	$if macos {
+		return C.gg_get_screen_size()
+	}
+	// TODO windows, linux, etc
+	return Size{}
 }
 
 fn C.WaitMessage()

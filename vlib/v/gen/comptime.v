@@ -25,7 +25,7 @@ fn (mut g Gen) comptime_call(node ast.ComptimeCall) {
 		}
 		if is_html {
 			// return vweb html template
-			g.writeln('vweb__Context_html(&app->vweb, _tmpl_res_$g.fn_decl.name); strings__Builder_free(&sb); string_free(&_tmpl_res_$g.fn_decl.name);')
+			g.writeln('vweb__Context_html(&app->Context, _tmpl_res_$g.fn_decl.name); strings__Builder_free(&sb); string_free(&_tmpl_res_$g.fn_decl.name);')
 		} else {
 			// return $tmpl string
 			fn_name := g.fn_decl.name.replace('.', '__')
@@ -38,9 +38,7 @@ fn (mut g Gen) comptime_call(node ast.ComptimeCall) {
 	result_type := g.table.find_type_idx('vweb.Result') // TODO not just vweb
 	if node.method_name == 'method' {
 		// `app.$method()`
-		m := node.sym.find_method(g.comp_for_method) or {
-			return
-		}
+		m := node.sym.find_method(g.comp_for_method) or { return }
 		/*
 		vals := m.attrs[0].split('/')
 		args := vals.filter(it.starts_with(':')).map(it[1..])
@@ -89,7 +87,7 @@ fn (mut g Gen) comptime_call(node ast.ComptimeCall) {
 		if j > 0 {
 			g.write(' else ')
 		}
-		g.write('if (string_eq($node.method_name, tos_lit("$method.name"))) ')
+		g.write('if (string_eq($node.method_name, _SLIT("$method.name"))) ')
 		g.write('${util.no_dots(node.sym.name)}_${method.name}($amp ')
 		g.expr(node.left)
 		g.writeln(');')
@@ -105,18 +103,18 @@ fn cgen_attrs(attrs []table.Attr) []string {
 		if attr.arg.len > 0 {
 			s += ': $attr.arg'
 		}
-		res << 'tos_lit("$s")'
+		res << '_SLIT("$s")'
 	}
 	return res
 }
 
 fn (mut g Gen) comp_at(node ast.AtExpr) {
 	if node.kind == .vmod_file {
-		val := cnewlines(node.val.replace('\r', '')).replace('\\', '\\\\')
-		g.write('tos_lit("$val")')
+		val := cnewlines(node.val.replace('\r', ''))
+		g.write('_SLIT("$val")')
 	} else {
 		val := node.val.replace('\\', '\\\\')
-		g.write('tos_lit("$val")')
+		g.write('_SLIT("$val")')
 	}
 }
 
@@ -186,6 +184,9 @@ fn (mut g Gen) comp_if(node ast.IfExpr) {
 
 fn (mut g Gen) comp_if_expr(cond ast.Expr) {
 	match cond {
+		ast.BoolLiteral {
+			g.expr(cond)
+		}
 		ast.ParExpr {
 			g.write('(')
 			g.comp_if_expr(cond.expr)
@@ -196,7 +197,10 @@ fn (mut g Gen) comp_if_expr(cond ast.Expr) {
 			g.comp_if_expr(cond.right)
 		}
 		ast.PostfixExpr {
-			ifdef := g.comp_if_to_ifdef((cond.expr as ast.Ident).name, true)
+			ifdef := g.comp_if_to_ifdef((cond.expr as ast.Ident).name, true) or {
+				verror(err)
+				return
+			}
 			g.write('defined($ifdef)')
 		}
 		ast.InfixExpr {
@@ -215,15 +219,19 @@ fn (mut g Gen) comp_if_expr(cond ast.Expr) {
 				}
 				.eq, .ne {
 					// TODO Implement `$if method.args.len == 1`
+					g.write('1')
 				}
 				else {}
 			}
 		}
 		ast.Ident {
-			ifdef := g.comp_if_to_ifdef(cond.name, false)
+			ifdef := g.comp_if_to_ifdef(cond.name, false) or { 'true' } // handled in checker
 			g.write('defined($ifdef)')
 		}
-		else {}
+		else {
+			// should be unreachable, but just in case
+			g.write('1')
+		}
 	}
 }
 
@@ -232,7 +240,7 @@ fn (mut g Gen) comp_for(node ast.CompFor) {
 	g.writeln('{ // 2comptime: \$for $node.val_var in ${sym.name}($node.kind.str()) {')
 	// vweb_result_type := table.new_type(g.table.find_type_idx('vweb.Result'))
 	mut i := 0
-	// g.writeln('string method = tos_lit("");')
+	// g.writeln('string method = _SLIT("");')
 	if node.kind == .methods {
 		mut methods := sym.methods.filter(it.attrs.len == 0) // methods without attrs first
 		methods_with_attrs := sym.methods.filter(it.attrs.len > 0) // methods with attrs second
@@ -249,7 +257,7 @@ fn (mut g Gen) comp_for(node ast.CompFor) {
 			*/
 			g.comp_for_method = method.name
 			g.writeln('\t// method $i')
-			g.writeln('\t${node.val_var}.name = tos_lit("$method.name");')
+			g.writeln('\t${node.val_var}.name = _SLIT("$method.name");')
 			if method.attrs.len == 0 {
 				g.writeln('\t${node.val_var}.attrs = __new_array_with_default(0, 0, sizeof(string), 0);')
 			} else {
@@ -306,10 +314,11 @@ fn (mut g Gen) comp_for(node ast.CompFor) {
 		}
 	} else if node.kind == .fields {
 		// TODO add fields
-		if sym.info is table.Struct {
-			info := sym.info as table.Struct
-			mut fields := info.fields.filter(it.attrs.len == 0)
-			fields_with_attrs := info.fields.filter(it.attrs.len > 0)
+		// TODO: temporary, remove this
+		sym_info := sym.info
+		if sym_info is table.Struct {
+			mut fields := sym_info.fields.filter(it.attrs.len == 0)
+			fields_with_attrs := sym_info.fields.filter(it.attrs.len > 0)
 			fields << fields_with_attrs
 			if fields.len > 0 {
 				g.writeln('\tFieldData $node.val_var;')
@@ -317,7 +326,7 @@ fn (mut g Gen) comp_for(node ast.CompFor) {
 			}
 			for field in fields {
 				g.writeln('\t// field $i')
-				g.writeln('\t${node.val_var}.name = tos_lit("$field.name");')
+				g.writeln('\t${node.val_var}.name = _SLIT("$field.name");')
 				if field.attrs.len == 0 {
 					g.writeln('\t${node.val_var}.attrs = __new_array_with_default(0, 0, sizeof(string), 0);')
 				} else {
@@ -326,7 +335,7 @@ fn (mut g Gen) comp_for(node ast.CompFor) {
 						attrs.join(', ') + '}));')
 				}
 				// field_sym := g.table.get_type_symbol(field.typ)
-				// g.writeln('\t${node.val_var}.typ = tos_lit("$field_sym.name");')
+				// g.writeln('\t${node.val_var}.typ = _SLIT("$field_sym.name");')
 				styp := field.typ
 				g.writeln('\t${node.val_var}.typ = $styp;')
 				g.writeln('\t${node.val_var}.is_pub = $field.is_pub;')
