@@ -11,6 +11,10 @@ const skip_files = [
 		'vlib/v/checker/tests/custom_comptime_define_if_flag.vv',
 	]
 
+const skip_on_ubuntu_musl = [
+		'vlib/v/checker/tests/vweb_tmpl_used_var.vv',
+]
+
 const turn_off_vcolors = os.setenv('VCOLORS', 'never', true)
 
 const should_autofix = os.getenv('VAUTOFIX') != ''
@@ -89,6 +93,9 @@ fn (mut tasks []TaskDescription) run() {
 	mut work := sync.new_channel<TaskDescription>(tasks.len)
 	mut results := sync.new_channel<TaskDescription>(tasks.len)
 	mut m_skip_files := skip_files.clone()
+	if os.getenv('V_CI_UBUNTU_MUSL').len > 0 {
+		m_skip_files << skip_on_ubuntu_musl
+	}
 	$if noskip ? {
 		m_skip_files = []
 	}
@@ -168,6 +175,9 @@ fn (mut task TaskDescription) execute() {
 	cli_cmd := '$task.vexe $task.voptions $program'
 	res := os.exec(cli_cmd) or { panic(err) }
 	expected_out_path := program.replace('.vv', '') + task.result_extension
+	if should_autofix && !os.exists(expected_out_path) {
+		os.write_file(expected_out_path, '')
+	}
 	mut expected := os.read_file(expected_out_path) or { panic(err) }
 	task.expected = clean_line_endings(expected)
 	task.found___ = clean_line_endings(res.output)
