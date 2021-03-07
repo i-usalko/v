@@ -39,12 +39,11 @@ const (
 // validate_client validates client frame rules from RFC6455
 pub fn (mut ws Client) validate_frame(frame &Frame) ? {
 	if frame.rsv1 || frame.rsv2 || frame.rsv3 {
-		ws.close(1002, 'rsv cannot be other than 0, not negotiated')
+		ws.close(1002, 'rsv cannot be other than 0, not negotiated') ?
 		return error('rsv cannot be other than 0, not negotiated')
 	}
-	if (int(frame.opcode) >= 3 && int(frame.opcode) <= 7) ||
-		(int(frame.opcode) >= 11 && int(frame.opcode) <= 15)
-	{
+	if (int(frame.opcode) >= 3 && int(frame.opcode) <= 7)
+		|| (int(frame.opcode) >= 11 && int(frame.opcode) <= 15) {
 		ws.close(1002, 'use of reserved opcode') ?
 		return error('use of reserved opcode')
 	}
@@ -114,7 +113,7 @@ fn (mut ws Client) validate_utf_8(opcode OPCode, payload []byte) ? {
 	if opcode in [.text_frame, .close] && !utf8.validate(payload.data, payload.len) {
 		ws.logger.error('malformed utf8 payload, payload len: ($payload.len)')
 		ws.send_error_event('Recieved malformed utf8.')
-		ws.close(1007, 'malformed utf8 payload')
+		ws.close(1007, 'malformed utf8 payload') ?
 		return error('malformed utf8 payload')
 	}
 }
@@ -149,7 +148,7 @@ pub fn (mut ws Client) read_next_message() ?Message {
 			ws.validate_utf_8(frame.opcode, frame_payload) or {
 				ws.logger.error('UTF8 validation error: $err, len of payload($frame_payload.len)')
 				ws.send_error_event('UTF8 validation error: $err, len of payload($frame_payload.len)')
-				return error(err)
+				return err
 			}
 			msg := Message{
 				opcode: OPCode(frame.opcode)
@@ -216,7 +215,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 	mut rbuff := [1]byte{}
 	mut mask_end_byte := 0
 	for ws.state == .open {
-		read_bytes := ws.socket_read_ptr(byteptr(rbuff), 1) ?
+		read_bytes := ws.socket_read_ptr(&rbuff[0], 1) ?
 		if read_bytes == 0 {
 			// this is probably a timeout or close
 			continue
@@ -224,7 +223,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 		buffer[bytes_read] = rbuff[0]
 		bytes_read++
 		// parses the first two header bytes to get basic frame information
-		if bytes_read == u64(header_len_offset) {
+		if bytes_read == u64(websocket.header_len_offset) {
 			frame.fin = (buffer[0] & 0x80) == 0x80
 			frame.rsv1 = (buffer[0] & 0x40) == 0x40
 			frame.rsv2 = (buffer[0] & 0x20) == 0x20
@@ -235,11 +234,11 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 			// if has mask set the byte postition where mask ends
 			if frame.has_mask {
 				mask_end_byte = if frame.payload_len < 126 {
-					header_len_offset + 4
+					websocket.header_len_offset + 4
 				} else if frame.payload_len == 126 {
-					header_len_offset + 6
+					websocket.header_len_offset + 6
 				} else if frame.payload_len == 127 {
-					header_len_offset + 12
+					websocket.header_len_offset + 12
 				} else {
 					0
 				} // impossible
@@ -250,7 +249,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 				break
 			}
 		}
-		if frame.payload_len == 126 && bytes_read == u64(extended_payload16_end_byte) {
+		if frame.payload_len == 126 && bytes_read == u64(websocket.extended_payload16_end_byte) {
 			frame.header_len += 2
 			frame.payload_len = 0
 			frame.payload_len |= buffer[2] << 8
@@ -260,7 +259,7 @@ pub fn (mut ws Client) parse_frame_header() ?Frame {
 				break
 			}
 		}
-		if frame.payload_len == 127 && bytes_read == u64(extended_payload64_end_byte) {
+		if frame.payload_len == 127 && bytes_read == u64(websocket.extended_payload64_end_byte) {
 			frame.header_len += 8
 			// these shift operators needs 64 bit on clang with -prod flag
 			mut payload_len := u64(0)

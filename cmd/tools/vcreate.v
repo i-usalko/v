@@ -13,18 +13,21 @@ struct Create {
 mut:
 	name        string
 	description string
+	version     string
+	license     string
 }
 
 fn cerror(e string) {
 	eprintln('\nerror: $e')
 }
 
-fn vmod_content(name string, desc string) string {
+fn vmod_content(c Create) string {
 	return [
 		'Module {',
-		"	name: '$name'",
-		"	description: '$desc'",
-		"	version: '0.0.0'",
+		"	name: '$c.name'",
+		"	description: '$c.description'",
+		"	version: '$c.version'",
+		"	license: '$c.license'",
 		'	dependencies: []',
 		'}',
 	].join('\n')
@@ -55,10 +58,10 @@ fn gen_gitignore(name string) string {
 fn (c &Create) write_vmod(new bool) {
 	vmod_path := if new { '$c.name/v.mod' } else { 'v.mod' }
 	mut vmod := os.create(vmod_path) or {
-		cerror(err)
+		cerror(err.msg)
 		exit(1)
 	}
-	vmod.write_str(vmod_content(c.name, c.description))
+	vmod.write_str(vmod_content(c)) or { panic(err) }
 	vmod.close()
 }
 
@@ -67,12 +70,12 @@ fn (c &Create) write_main(new bool) {
 		return
 	}
 	main_path := if new { '$c.name/${c.name}.v' } else { '${c.name}.v' }
-	mut main := os.create(main_path) or {
-		cerror(err)
+	mut mainfile := os.create(main_path) or {
+		cerror(err.msg)
 		exit(2)
 	}
-	main.write_str(main_content())
-	main.close()
+	mainfile.write_str(main_content()) or { panic(err) }
+	mainfile.close()
 }
 
 fn (c &Create) create_git_repo(dir string) {
@@ -87,15 +90,15 @@ fn (c &Create) create_git_repo(dir string) {
 				// We don't really need a .gitignore, it's just a nice-to-have
 				return
 			}
-			fl.write_str(gen_gitignore(c.name))
+			fl.write_str(gen_gitignore(c.name)) or { panic(err) }
 			fl.close()
 		}
 	}
 }
 
-fn create() {
+fn create(args []string) {
 	mut c := Create{}
-	c.name = os.input('Input your project name: ')
+	c.name = if args.len > 0 { args[0] } else { os.input('Input your project name: ') }
 	if c.name == '' {
 		cerror('project name cannot be empty')
 		exit(1)
@@ -108,11 +111,19 @@ fn create() {
 		cerror('$c.name folder already exists')
 		exit(3)
 	}
-	c.description = os.input('Input your project description: ')
-	println('Initialising ...')
-	os.mkdir(c.name) or {
-		panic(err)
+	c.description = if args.len > 1 { args[1] } else { os.input('Input your project description: ') }
+	default_version := '0.0.0'
+	c.version = os.input('Input your project version: ($default_version) ')
+	if c.version == '' {
+		c.version = default_version
 	}
+	default_license := 'MIT'
+	c.license = os.input('Input your project license: ($default_license) ')
+	if c.license == '' {
+		c.license = default_license
+	}
+	println('Initialising ...')
+	os.mkdir(c.name) or { panic(err) }
 	c.write_vmod(true)
 	c.write_main(true)
 	c.create_git_repo(c.name)
@@ -134,7 +145,7 @@ fn init_project() {
 
 fn main() {
 	if os.args[1] == 'new' {
-		create()
+		create(os.args[2..])
 	} else if os.args[1] == 'init' {
 		init_project()
 	} else {

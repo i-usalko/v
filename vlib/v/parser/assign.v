@@ -23,6 +23,12 @@ fn (mut p Parser) check_undefined_variables(exprs []ast.Expr, val ast.Expr) ? {
 				}
 			}
 		}
+		ast.CallExpr {
+			p.check_undefined_variables(exprs, val.left) ?
+			for arg in val.args {
+				p.check_undefined_variables(exprs, arg.expr) ?
+			}
+		}
 		ast.InfixExpr {
 			p.check_undefined_variables(exprs, val.left) ?
 			p.check_undefined_variables(exprs, val.right) ?
@@ -65,7 +71,8 @@ fn (mut p Parser) check_cross_variables(exprs []ast.Expr, val ast.Expr) bool {
 			}
 		}
 		ast.InfixExpr {
-			return p.check_cross_variables(exprs, val_.left) || p.check_cross_variables(exprs, val_.right)
+			return p.check_cross_variables(exprs, val_.left)
+				|| p.check_cross_variables(exprs, val_.right)
 		}
 		ast.PrefixExpr {
 			return p.check_cross_variables(exprs, val_.right)
@@ -92,26 +99,20 @@ fn (mut p Parser) partial_assign_stmt(left []ast.Expr, left_comments []ast.Comme
 	p.next()
 	mut comments := []ast.Comment{cap: 2 * left_comments.len + 1}
 	comments << left_comments
-	comments << p.eat_comments()
+	comments << p.eat_comments({})
 	mut right_comments := []ast.Comment{}
 	mut right := []ast.Expr{cap: left.len}
-	if p.tok.kind == .key_go {
-		stmt := p.stmt(false)
-		go_stmt := stmt as ast.GoStmt
-		right << ast.GoExpr{
-			go_stmt: go_stmt
-			pos: go_stmt.pos
-		}
-	} else {
-		right, right_comments = p.expr_list()
-	}
+	right, right_comments = p.expr_list()
 	comments << right_comments
-	end_comments := p.eat_line_end_comments()
+	end_comments := p.eat_comments(same_line: true)
 	mut has_cross_var := false
 	if op == .decl_assign {
 		// a, b := a + 1, b
 		for r in right {
-			p.check_undefined_variables(left, r)
+			p.check_undefined_variables(left, r) or {
+				p.error('check_undefined_variables failed')
+				return ast.Stmt{}
+			}
 		}
 	} else if left.len > 1 {
 		// a, b = b, a
@@ -140,8 +141,8 @@ fn (mut p Parser) partial_assign_stmt(left []ast.Expr, left_comments []ast.Comme
 						iv := lx.info as ast.IdentVar
 						share = iv.share
 						if iv.is_static {
-							if !p.pref.translated {
-								p.error_with_pos('static variables are supported only in -translated mode',
+							if !p.pref.translated && !p.pref.is_fmt && !p.inside_unsafe_fn {
+								p.error_with_pos('static variables are supported only in -translated mode or in [unsafe] fn',
 									lx.pos)
 								return ast.Stmt{}
 							}

@@ -13,15 +13,45 @@ import math
 // import time
 pub type FNCb = fn (x voidptr)
 
-pub type FNEvent = fn (e voidptr, x voidptr)
+pub type FNEvent = fn (e &Event, x voidptr)
 
 pub type FNFail = fn (msg string, x voidptr)
 
-pub type FNKeyDown = fn (c sapp.KeyCode, m sapp.Modifier, x voidptr)
+pub type FNKeyDown = fn (c KeyCode, m Modifier, x voidptr)
 
 pub type FNMove = fn (x f32, y f32, z voidptr)
 
 pub type FNChar = fn (c u32, x voidptr)
+
+pub struct Event {
+pub mut:
+	frame_count        u64
+	typ                sapp.EventType
+	key_code           KeyCode
+	char_code          u32
+	key_repeat         bool
+	modifiers          u32
+	mouse_button       sapp.MouseButton
+	mouse_x            f32
+	mouse_y            f32
+	mouse_dx           f32
+	mouse_dy           f32
+	scroll_x           f32
+	scroll_y           f32
+	num_touches        int
+	touches            [8]C.sapp_touchpoint
+	window_width       int
+	window_height      int
+	framebuffer_width  int
+	framebuffer_height int
+}
+
+pub enum Modifier {
+	shift = 1 //(1<<0)
+	ctrl = 2 //(1<<1)
+	alt = 4 //(1<<2)
+	super = 8 //(1<<3)
+}
 
 pub struct Config {
 pub:
@@ -40,6 +70,7 @@ pub:
 	bg_color          gx.Color
 	init_fn           FNCb      = voidptr(0)
 	frame_fn          FNCb      = voidptr(0)
+	native_frame_fn   FNCb      = voidptr(0)
 	cleanup_fn        FNCb      = voidptr(0)
 	fail_fn           FNFail    = voidptr(0)
 	event_fn          FNEvent   = voidptr(0)
@@ -60,6 +91,12 @@ pub:
 	font_path             string
 	custom_bold_font_path string
 	ui_mode               bool // refreshes only on events to save CPU usage
+	// font bytes for embedding
+	font_bytes_normal []byte
+	font_bytes_bold   []byte
+	font_bytes_mono   []byte
+	font_bytes_italic []byte
+	native_rendering  bool // Cocoa on macOS/iOS, GDI+ on Windows
 }
 
 pub struct Context {
@@ -70,6 +107,8 @@ mut:
 	image_cache   []Image
 	needs_refresh bool = true
 	ticks         int
+pub:
+	native_rendering bool
 pub mut:
 	scale f32 = 1.0
 	// will get set to 2.0 for retina, will remain 1.0 for normal
@@ -82,6 +121,7 @@ pub mut:
 	ft          &FT
 	font_inited bool
 	ui_mode     bool // do not redraw everything 60 times/second, but only when the user requests
+	mbtn_mask   byte
 }
 
 pub struct Size {
@@ -107,12 +147,7 @@ fn gg_init_sokol_window(user_data voidptr) {
 	gfx.setup(&desc)
 	sgl_desc := C.sgl_desc_t{}
 	sgl.setup(&sgl_desc)
-	g.scale = sapp.dpi_scale()
-	// NB: on older X11, `Xft.dpi` from ~/.Xresources, that sokol uses,
-	// may not be set which leads to sapp.dpi_scale reporting incorrectly 0.0
-	if g.scale < 0.1 {
-		g.scale = 1.0
-	}
+	g.scale = dpi_scale()
 	// is_high_dpi := sapp.high_dpi()
 	// fb_w := sapp.width()
 	// fb_h := sapp.height()
@@ -125,20 +160,31 @@ fn gg_init_sokol_window(user_data voidptr) {
 		g.ft = new_ft(
 			font_path: g.config.font_path
 			custom_bold_font_path: g.config.custom_bold_font_path
-			scale: sapp.dpi_scale()
+			scale: dpi_scale()
 		) or { panic(err) }
 		// println('FT took ${time.ticks()-t} ms')
 		g.font_inited = true
 	} else {
 		if !exists {
-			sfont := system_font_path()
-			eprintln('font file "$g.config.font_path" does not exist, the system font was used instead.')
-			g.ft = new_ft(
-				font_path: sfont
-				custom_bold_font_path: g.config.custom_bold_font_path
-				scale: sapp.dpi_scale()
-			) or { panic(err) }
-			g.font_inited = true
+			if g.config.font_bytes_normal.len > 0 {
+				g.ft = new_ft(
+					bytes_normal: g.config.font_bytes_normal
+					bytes_bold: g.config.font_bytes_bold
+					bytes_mono: g.config.font_bytes_mono
+					bytes_italic: g.config.font_bytes_italic
+					scale: sapp.dpi_scale()
+				) or { panic(err) }
+				g.font_inited = true
+			} else {
+				sfont := system_font_path()
+				eprintln('font file "$g.config.font_path" does not exist, the system font was used instead.')
+				g.ft = new_ft(
+					font_path: sfont
+					custom_bold_font_path: g.config.custom_bold_font_path
+					scale: sapp.dpi_scale()
+				) or { panic(err) }
+				g.font_inited = true
+			}
 		}
 	}
 	//
@@ -153,6 +199,9 @@ fn gg_init_sokol_window(user_data voidptr) {
 		g.config.init_fn(g.config.user_data)
 	}
 	// Create images now that we can do that after sg is inited
+	if g.native_rendering {
+		return
+	}
 	for i in 0 .. g.image_cache.len {
 		g.image_cache[i].init_sokol_image()
 	}
@@ -162,6 +211,9 @@ fn gg_frame_fn(user_data voidptr) {
 	mut ctx := unsafe { &Context(user_data) }
 	if ctx.config.frame_fn == voidptr(0) {
 		return
+	}
+	if ctx.native_rendering {
+		// return
 	}
 	if ctx.ui_mode && !ctx.needs_refresh {
 		// Draw 3 more frames after the "stop refresh" command
@@ -180,8 +232,28 @@ pub fn (mut ctx Context) refresh_ui() {
 }
 
 fn gg_event_fn(ce &C.sapp_event, user_data voidptr) {
-	e := unsafe { &sapp.Event(ce) }
+	// e := unsafe { &sapp.Event(ce) }
+	mut e := unsafe { &Event(ce) }
 	mut g := unsafe { &Context(user_data) }
+	if e.typ == .mouse_down {
+		bitplace := int(e.mouse_button)
+		g.mbtn_mask |= byte(1 << bitplace)
+	}
+	if e.typ == .mouse_up {
+		bitplace := int(e.mouse_button)
+		g.mbtn_mask &= ~(byte(1 << bitplace))
+	}
+	if e.typ == .mouse_move && e.mouse_button == .invalid {
+		if g.mbtn_mask & 0x01 > 0 {
+			e.mouse_button = .left
+		}
+		if g.mbtn_mask & 0x02 > 0 {
+			e.mouse_button = .right
+		}
+		if g.mbtn_mask & 0x04 > 0 {
+			e.mouse_button = .middle
+		}
+	}
 	if g.config.event_fn != voidptr(0) {
 		g.config.event_fn(e, g.config.user_data)
 	}
@@ -189,7 +261,7 @@ fn gg_event_fn(ce &C.sapp_event, user_data voidptr) {
 		.key_down {
 			if g.config.keydown_fn != voidptr(0) {
 				kdfn := g.config.keydown_fn
-				kdfn(e.key_code, sapp.Modifier(e.modifiers), g.config.user_data)
+				kdfn(e.key_code, Modifier(e.modifiers), g.config.user_data)
 			}
 		}
 		.char {
@@ -223,7 +295,7 @@ fn gg_cleanup_fn(user_data voidptr) {
 
 fn gg_fail_fn(msg charptr, user_data voidptr) {
 	mut g := unsafe { &Context(user_data) }
-	vmsg := tos3(msg)
+	vmsg := unsafe { tos3(msg) }
 	if g.config.fail_fn != voidptr(0) {
 		g.config.fail_fn(vmsg, g.config.user_data)
 	} else {
@@ -237,9 +309,10 @@ pub fn new_context(cfg Config) &Context {
 		width: cfg.width
 		height: cfg.height
 		config: cfg
-		render_text: cfg.font_path != ''
+		render_text: cfg.font_path != '' || cfg.font_bytes_normal.len > 0
 		ft: 0
 		ui_mode: cfg.ui_mode
+		native_rendering: cfg.native_rendering
 	}
 	g.set_bg_color(cfg.bg_color)
 	// C.printf('new_context() %p\n', cfg.user_data)
@@ -257,6 +330,7 @@ pub fn new_context(cfg Config) &Context {
 		sample_count: cfg.sample_count
 		high_dpi: true
 		fullscreen: cfg.fullscreen
+		native_render: cfg.native_rendering
 	}
 	if cfg.use_ortho {
 	} else {
@@ -276,6 +350,12 @@ pub fn (mut ctx Context) set_bg_color(c gx.Color) {
 
 // TODO: Fix alpha
 pub fn (ctx &Context) draw_rect(x f32, y f32, w f32, h f32, c gx.Color) {
+	$if macos {
+		if ctx.native_rendering {
+			C.darwin_draw_rect(x, ctx.height - (y + h), w, h, c)
+			return
+		}
+	}
 	if c.a != 255 {
 		sgl.load_pipeline(ctx.timage_pip)
 	}
@@ -286,6 +366,16 @@ pub fn (ctx &Context) draw_rect(x f32, y f32, w f32, h f32, c gx.Color) {
 	sgl.v2f((x + w) * ctx.scale, (y + h) * ctx.scale)
 	sgl.v2f(x * ctx.scale, (y + h) * ctx.scale)
 	sgl.end()
+}
+
+[inline]
+pub fn (ctx &Context) draw_square(x f32, y f32, s f32, c gx.Color) {
+	ctx.draw_rect(x, y, s, s, c)
+}
+
+[inline]
+pub fn (ctx &Context) set_pixel(x f32, y f32, c gx.Color) {
+	ctx.draw_square(x, y, 1, c)
 }
 
 pub fn (ctx &Context) draw_triangle(x f32, y f32, x2 f32, y2 f32, x3 f32, y3 f32, c gx.Color) {
@@ -322,6 +412,11 @@ pub fn (ctx &Context) draw_empty_rect(x f32, y f32, w f32, h f32, c gx.Color) {
 	sgl.end()
 }
 
+[inline]
+pub fn (ctx &Context) draw_empty_square(x f32, y f32, s f32, c gx.Color) {
+	ctx.draw_empty_rect(x, y, s, s, c)
+}
+
 pub fn (ctx &Context) draw_circle_line(x f32, y f32, r int, segments int, c gx.Color) {
 	if c.a != 255 {
 		sgl.load_pipeline(ctx.timage_pip)
@@ -341,6 +436,12 @@ pub fn (ctx &Context) draw_circle_line(x f32, y f32, r int, segments int, c gx.C
 }
 
 pub fn (ctx &Context) draw_circle(x f32, y f32, r f32, c gx.Color) {
+	$if macos {
+		if ctx.native_rendering {
+			C.darwin_draw_circle(x - r + 1, ctx.height - (y + r + 3), r, c)
+			return
+		}
+	}
 	if ctx.scale == 1 {
 		ctx.draw_circle_with_segments(x, y, r, 10, c)
 	} else {
@@ -442,6 +543,11 @@ fn abs(a f32) f32 {
 		return a
 	}
 	return -a
+}
+
+pub fn (mut ctx Context) resize(width int, height int) {
+	ctx.width = width
+	ctx.height = height
 }
 
 pub fn (ctx &Context) draw_line(x f32, y f32, x2 f32, y2 f32, c gx.Color) {
@@ -592,12 +698,87 @@ pub fn (ctx &Context) draw_empty_rounded_rect(x f32, y f32, w f32, h f32, radius
 	sgl.end()
 }
 
+// draw_convex_poly draws a convex polygon, given an array of points, and a color.
+// Note that the points must be given in clockwise order.
+pub fn (ctx &Context) draw_convex_poly(points []f32, c gx.Color) {
+	assert points.len % 2 == 0
+	len := points.len / 2
+	assert len >= 3
+
+	if c.a != 255 {
+		sgl.load_pipeline(ctx.timage_pip)
+	}
+	sgl.c4b(c.r, c.g, c.b, c.a)
+
+	sgl.begin_triangle_strip()
+	x0 := points[0]
+	y0 := points[1]
+	for i in 1 .. (len / 2 + 1) {
+		sgl.v2f(x0, y0)
+		sgl.v2f(points[i * 4 - 2], points[i * 4 - 1])
+		sgl.v2f(points[i * 4], points[i * 4 + 1])
+	}
+
+	if len % 2 == 0 {
+		sgl.v2f(points[2 * len - 2], points[2 * len - 1])
+	}
+	sgl.end()
+}
+
+// draw_empty_poly - draws the borders of a polygon, given an array of points, and a color.
+// Note that the points must be given in clockwise order.
+pub fn (ctx &Context) draw_empty_poly(points []f32, c gx.Color) {
+	assert points.len % 2 == 0
+	len := points.len / 2
+	assert len >= 3
+
+	if c.a != 255 {
+		sgl.load_pipeline(ctx.timage_pip)
+	}
+	sgl.c4b(c.r, c.g, c.b, c.a)
+
+	sgl.begin_line_strip()
+	for i in 0 .. len {
+		sgl.v2f(points[2 * i], points[2 * i + 1])
+	}
+	sgl.v2f(points[0], points[1])
+	sgl.end()
+}
+
 pub fn screen_size() Size {
 	$if macos {
 		return C.gg_get_screen_size()
 	}
 	// TODO windows, linux, etc
 	return Size{}
+}
+
+// window_size returns the `Size` of the active window
+pub fn window_size() Size {
+	s := dpi_scale()
+	return Size{int(sapp.width() / s), int(sapp.height() / s)}
+}
+
+// window_size_real_pixels returns the `Size` of the active window without scale
+pub fn window_size_real_pixels() Size {
+	return Size{sapp.width(), sapp.height()}
+}
+
+pub fn dpi_scale() f32 {
+	mut s := sapp.dpi_scale()
+	$if android {
+		s *= android_dpi_scale()
+	}
+	// NB: on older X11, `Xft.dpi` from ~/.Xresources, that sokol uses,
+	// may not be set which leads to sapp.dpi_scale reporting incorrectly 0.0
+	if s < 0.1 {
+		s = 1.
+	}
+	return s
+}
+
+pub fn high_dpi() bool {
+	return C.sapp_high_dpi()
 }
 
 fn C.WaitMessage()

@@ -7,7 +7,7 @@ const (
 	vexe              = os.real_path(os.getenv('VEXE'))
 	cfolder           = os.dir(@FILE)
 	so_ext            = dl.dl_ext
-	library_file_name = os.join_path(cfolder, 'library$so_ext')
+	library_file_name = os.join_path(cfolder, dl.get_libname('library'))
 )
 
 fn test_vexe() {
@@ -22,7 +22,7 @@ fn test_vexe() {
 
 fn test_can_compile_library() {
 	os.chdir(cfolder)
-	os.rm(library_file_name)
+	os.rm(library_file_name) or { }
 	res := v_compile('-d no_backtrace -o library -shared library.v')
 	eprintln('res: $res')
 	assert os.is_file(library_file_name)
@@ -34,7 +34,7 @@ fn test_can_compile_main_program() {
 	result := v_compile('run use.v')
 	eprintln('result: $result')
 	assert result.output.contains('res: 4')
-	os.rm(library_file_name)
+	os.rm(library_file_name) or { }
 }
 
 fn v_compile(vopts string) os.Result {

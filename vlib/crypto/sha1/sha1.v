@@ -54,8 +54,9 @@ pub fn new() &Digest {
 	return d
 }
 
+// write writes the contents of `p_` to the internal hash representation.
 [manualfree]
-pub fn (mut d Digest) write(p_ []byte) int {
+pub fn (mut d Digest) write(p_ []byte) ?int {
 	nn := p_.len
 	unsafe {
 		mut p := p_
@@ -89,6 +90,7 @@ pub fn (mut d Digest) write(p_ []byte) int {
 	return nn
 }
 
+// sum returns a copy of the generated sum of the bytes in `b_in`.
 pub fn (d &Digest) sum(b_in []byte) []byte {
 	// Make a copy of d so that caller can keep writing and summing.
 	mut d0 := *d
@@ -100,20 +102,21 @@ pub fn (d &Digest) sum(b_in []byte) []byte {
 	return b_out
 }
 
+// checksum returns the byte checksum of the `Digest`.
 fn (mut d Digest) checksum() []byte {
 	mut len := d.len
 	// Padding.  Add a 1 bit and 0 bits until 56 bytes mod 64.
 	mut tmp := []byte{len: (64)}
 	tmp[0] = 0x80
 	if int(len) % 64 < 56 {
-		d.write(tmp[..56 - int(len) % 64])
+		d.write(tmp[..56 - int(len) % 64]) or { panic(err) }
 	} else {
-		d.write(tmp[..64 + 56 - int(len) % 64])
+		d.write(tmp[..64 + 56 - int(len) % 64]) or { panic(err) }
 	}
 	// Length in bits.
 	len <<= 3
 	binary.big_endian_put_u64(mut tmp, len)
-	d.write(tmp[..8])
+	d.write(tmp[..8]) or { panic(err) }
 	mut digest := []byte{len: (size)}
 	binary.big_endian_put_u32(mut digest, d.h[0])
 	binary.big_endian_put_u32(mut digest[4..], d.h[1])
@@ -123,10 +126,10 @@ fn (mut d Digest) checksum() []byte {
 	return digest
 }
 
-// Sum returns the SHA-1 checksum of the data.
+// sum returns the SHA-1 checksum of the bytes passed in `data`.
 pub fn sum(data []byte) []byte {
 	mut d := new()
-	d.write(data)
+	d.write(data) or { panic(err) }
 	return d.checksum()
 }
 
@@ -136,14 +139,17 @@ fn block(mut dig Digest, p []byte) {
 	block_generic(mut dig, p)
 }
 
+// size returns the size of the checksum in bytes.
 pub fn (d &Digest) size() int {
 	return size
 }
 
+// block_size returns the block size of the checksum in bytes.
 pub fn (d &Digest) block_size() int {
 	return block_size
 }
 
+// hexhash returns a hexadecimal SHA1 hash sum `string` of `s`.
 pub fn hexhash(s string) string {
 	return sum(s.bytes()).hex()
 }

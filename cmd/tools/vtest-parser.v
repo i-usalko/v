@@ -14,7 +14,7 @@ const (
 	ecode_timeout = 101
 	ecode_memout  = 102
 	ecode_exec    = 103
-	ecode_details = {
+	ecode_details = map{
 		'101': 'too slow'
 		'102': 'too memory hungry'
 		'103': 'worker executable not found'
@@ -26,17 +26,19 @@ mut:
 	is_help    bool
 	is_worker  bool
 	is_verbose bool
+	is_silent  bool // do not print any status/progress during processing, just failures.
+	is_linear  bool // print linear progress log, without trying to do term cursor up + \r msg. Easier to use in a CI job
 	timeout_ms int
-	myself     string // path to this executable, so the supervisor can launch worker processes
+	myself     string   // path to this executable, so the supervisor can launch worker processes
 	all_paths  []string // all files given to the supervisor process
-	path       string // the current path, given to a worker process
-	cut_index  int // the cut position in the source from context.path
-	max_index  int // the maximum index (equivalent to the file content length)
+	path       string   // the current path, given to a worker process
+	cut_index  int      // the cut position in the source from context.path
+	max_index  int      // the maximum index (equivalent to the file content length)
 	// parser context in the worker processes:
 	table      table.Table
 	scope      ast.Scope
-	pref       pref.Preferences
-	period_ms  int // print periodic progress
+	pref       &pref.Preferences
+	period_ms  int  // print periodic progress
 	stop_print bool // stop printing the periodic progress
 }
 
@@ -56,8 +58,9 @@ fn main() {
 		}
 		mut source := os.read_file(context.path) ?
 		source = source[..context.cut_index]
+
 		go fn (ms int) {
-			time.sleep_ms(ms)
+			time.sleep(ms * time.millisecond)
 			exit(ecode_timeout)
 		}(context.timeout_ms)
 		_ := parser.parse_text(source, context.path, context.table, .skip_comments, context.pref,
@@ -93,7 +96,9 @@ fn main() {
 }
 
 fn process_cli_args() &Context {
-	mut context := &Context{}
+	mut context := &Context{
+		pref: pref.new_preferences()
+	}
 	context.myself = os.executable()
 	mut fp := flag.new_flag_parser(os.args_after('test-parser'))
 	fp.application(os.file_name(context.myself))
@@ -106,6 +111,8 @@ fn process_cli_args() &Context {
 	fp.skip_executable()
 	context.is_help = fp.bool('help', `h`, false, 'Show help/usage screen.')
 	context.is_verbose = fp.bool('verbose', `v`, false, 'Be more verbose.')
+	context.is_silent = fp.bool('silent', `S`, false, 'Do not print progress at all.')
+	context.is_linear = fp.bool('linear', `L`, false, 'Print linear progress log. Suitable for CI.')
 	context.period_ms = fp.int('progress_ms', `s`, 500, 'print a status report periodically, the period is given in milliseconds.')
 	context.is_worker = fp.bool('worker', `w`, false, 'worker specific flag - is this a worker process, that can crash/panic.')
 	context.cut_index = fp.int('cut_index', `c`, 1, 'worker specific flag - cut index in the source file, everything before that will be parsed, the rest - ignored.')
@@ -117,7 +124,7 @@ fn process_cli_args() &Context {
 		exit(0)
 	}
 	context.all_paths = fp.finalize() or {
-		context.error(err)
+		context.error(err.msg)
 		exit(1)
 	}
 	if !context.is_worker && context.all_paths.len == 0 {
@@ -211,7 +218,7 @@ fn (mut context Context) process_whole_file_in_worker(path string) (int, int) {
 		cmd := '"$context.myself" $verbosity --worker --timeout_ms ${context.timeout_ms:5} --cut_index ${i:5} --path "$path" '
 		context.log(cmd)
 		res := os.exec(cmd) or { os.Result{
-			output: err
+			output: err.msg
 			exit_code: ecode_exec
 		} }
 		context.log('worker exit_code: $res.exit_code | worker output:\n$res.output')
@@ -226,7 +233,11 @@ fn (mut context Context) process_whole_file_in_worker(path string) (int, int) {
 			line := part.count('\n') + 1
 			last_line := part.all_after_last('\n')
 			col := last_line.len
-			err := if is_panic { red('parser failure: panic') } else { red('parser failure: crash, ${ecode_details[res.exit_code.str()]}') }
+			err := if is_panic {
+				red('parser failure: panic')
+			} else {
+				red('parser failure: crash, ${ecode_details[res.exit_code.str()]}')
+			}
 			path_to_line := bold('$path:$line:$col:')
 			err_line := last_line.trim_left('\t')
 			println('$path_to_line $err')
@@ -240,25 +251,44 @@ fn (mut context Context) process_whole_file_in_worker(path string) (int, int) {
 
 fn (mut context Context) start_printing() {
 	context.stop_print = false
-	println('\n')
+	if !context.is_linear && !context.is_silent {
+		println('\n')
+	}
 	go context.print_periodic_status()
 }
 
 fn (mut context Context) stop_printing() {
 	context.stop_print = true
-	time.sleep_ms(context.period_ms / 5)
+	time.sleep(time.millisecond * context.period_ms / 5)
 }
 
 fn (mut context Context) print_status() {
+	if context.is_silent {
+		return
+	}
+	if (context.cut_index == 1) && (context.max_index == 0) {
+		return
+	}
+	msg := '>   ${context.path:-30} | index: ${context.cut_index:5}/${context.max_index - 1:5}'
+	if context.is_linear {
+		eprintln(msg)
+		return
+	}
 	term.cursor_up(1)
-	eprint('\r  >   ${context.path:-30} | index: ${context.cut_index:5}/${context.max_index - 1:5}\n')
+	eprint('\r  $msg\n')
 }
 
 fn (mut context Context) print_periodic_status() {
+	context.print_status()
+	mut printed_at_least_once := false
 	for !context.stop_print {
 		context.print_status()
 		for i := 0; i < 10 && !context.stop_print; i++ {
-			time.sleep_ms(context.period_ms / 10)
+			time.sleep(time.millisecond * context.period_ms / 10)
+			if context.cut_index > 50 && !printed_at_least_once {
+				context.print_status()
+				printed_at_least_once = true
+			}
 		}
 	}
 	context.print_status()

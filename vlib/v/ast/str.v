@@ -22,11 +22,12 @@ pub fn (node &FnDecl) modname() string {
 pub fn (node &FnDecl) stringify(t &table.Table, cur_mod string, m2a map[string]string) string {
 	mut f := strings.new_builder(30)
 	if node.is_pub {
-		f.write('pub ')
+		f.write_string('pub ')
 	}
 	mut receiver := ''
 	if node.is_method {
-		mut styp := util.no_cur_mod(t.type_to_code(node.receiver.typ), cur_mod)
+		mut styp := util.no_cur_mod(t.type_to_code(node.receiver.typ.clear_flag(.shared_f)),
+			cur_mod)
 		m := if node.rec_mut { node.receiver.typ.share().str() + ' ' } else { '' }
 		if node.rec_mut {
 			styp = styp[1..] // remove &
@@ -55,14 +56,22 @@ pub fn (node &FnDecl) stringify(t &table.Table, cur_mod string, m2a map[string]s
 	// 		name = 'JS.$name'
 	// 	}
 	// }
-	f.write('fn $receiver$name')
+	f.write_string('fn $receiver$name')
 	if name in ['+', '-', '*', '/', '%', '<', '>', '==', '!=', '>=', '<='] {
-		f.write(' ')
+		f.write_string(' ')
 	}
-	if node.is_generic {
-		f.write('<T>')
+	if node.generic_params.len > 0 {
+		f.write_string('<')
+		for i, param in node.generic_params {
+			is_last := i == node.generic_params.len - 1
+			f.write_string(param.name)
+			if !is_last {
+				f.write_string(', ')
+			}
+		}
+		f.write_string('>')
 	}
-	f.write('(')
+	f.write_string('(')
 	for i, arg in node.params {
 		// skip receiver
 		// if (node.is_method || node.is_interface) && i == 0 {
@@ -77,12 +86,12 @@ pub fn (node &FnDecl) stringify(t &table.Table, cur_mod string, m2a map[string]s
 		should_add_type := true // is_last_arg || is_type_only || node.params[i + 1].typ != arg.typ ||
 		// (node.is_variadic && i == node.params.len - 2)
 		if arg.is_mut {
-			f.write(arg.typ.share().str() + ' ')
+			f.write_string(arg.typ.share().str() + ' ')
 		}
-		f.write(arg.name)
-		mut s := t.type_to_str(arg.typ)
+		f.write_string(arg.name)
+		mut s := t.type_to_str(arg.typ.clear_flag(.shared_f))
 		if arg.is_mut {
-			// f.write(' mut')
+			// f.write_string(' mut')
 			if s.starts_with('&') {
 				s = s[1..]
 			}
@@ -93,24 +102,24 @@ pub fn (node &FnDecl) stringify(t &table.Table, cur_mod string, m2a map[string]s
 		}
 		if should_add_type {
 			if !is_type_only {
-				f.write(' ')
+				f.write_string(' ')
 			}
 			if node.is_variadic && is_last_arg {
-				f.write('...')
+				f.write_string('...')
 			}
-			f.write(s)
+			f.write_string(s)
 		}
 		if !is_last_arg {
-			f.write(', ')
+			f.write_string(', ')
 		}
 	}
-	f.write(')')
+	f.write_string(')')
 	if node.return_type != table.void_type {
 		mut rs := util.no_cur_mod(t.type_to_str(node.return_type), cur_mod)
 		for mod, alias in m2a {
 			rs = rs.replace(mod, alias)
 		}
-		f.write(' ' + rs)
+		f.write_string(' ' + rs)
 	}
 	return f.str()
 }
@@ -125,8 +134,9 @@ pub fn (node &FnDecl) stringify(t &table.Table, cur_mod string, m2a map[string]s
 // must be enclosed in braces.
 pub fn (lit &StringInterLiteral) get_fspec_braces(i int) (string, bool) {
 	mut res := []string{}
-	needs_fspec := lit.need_fmts[i] || lit.pluss[i] ||
-		(lit.fills[i] && lit.fwidths[i] >= 0) || lit.fwidths[i] != 0 || lit.precisions[i] != 987698
+	needs_fspec := lit.need_fmts[i] || lit.pluss[i]
+		|| (lit.fills[i] && lit.fwidths[i] >= 0) || lit.fwidths[i] != 0
+		|| lit.precisions[i] != 987698
 	mut needs_braces := needs_fspec
 	if !needs_braces {
 		if i + 1 < lit.vals.len && lit.vals[i + 1].len > 0 {
@@ -149,10 +159,19 @@ pub fn (lit &StringInterLiteral) get_fspec_braces(i int) (string, bool) {
 				CallExpr {
 					if sub_expr.args.len != 0 {
 						needs_braces = true
+					} else if sub_expr.left is CallExpr {
+						sub_expr = sub_expr.left
+						continue
+					} else if sub_expr.left is CastExpr {
+						needs_braces = true
 					}
 					break
 				}
 				SelectorExpr {
+					if sub_expr.field_name[0] == `@` {
+						needs_braces = true
+						break
+					}
 					sub_expr = sub_expr.expr
 					continue
 				}
@@ -224,6 +243,9 @@ pub fn (x Expr) str() string {
 			if x.name.starts_with('${x.mod}.') {
 				return util.strip_main_name('${x.name}($sargs)')
 			}
+			if x.mod == '' && x.name == '' {
+				return x.left.str() + '($sargs)'
+			}
 			return '${x.mod}.${x.name}($sargs)'
 		}
 		CharLiteral {
@@ -235,7 +257,7 @@ pub fn (x Expr) str() string {
 				return '/* $lines.len lines comment */'
 			} else {
 				text := x.text.trim('\x01').trim_space()
-				return '// $text'
+				return '´// $text´'
 			}
 		}
 		ComptimeSelector {
@@ -255,6 +277,14 @@ pub fn (x Expr) str() string {
 		}
 		InfixExpr {
 			return '$x.left.str() $x.op.str() $x.right.str()'
+		}
+		MapInit {
+			mut pairs := []string{}
+			for ik, kv in x.keys {
+				mv := x.vals[ik].str()
+				pairs << '$kv: $mv'
+			}
+			return 'map{ ${pairs.join(' ')} }'
 		}
 		ParExpr {
 			return '($x.expr)'
@@ -277,6 +307,9 @@ pub fn (x Expr) str() string {
 		}
 		SizeOf {
 			return 'sizeof($x.expr)'
+		}
+		OffsetOf {
+			return '__offsetof($x.struct_type, $x.field)'
 		}
 		StringInterLiteral {
 			mut res := []string{}
@@ -301,7 +334,10 @@ pub fn (x Expr) str() string {
 			return res.join('')
 		}
 		StringLiteral {
-			return '"$x.val"'
+			return "'$x.val'"
+		}
+		Type {
+			return 'Type($x.typ)'
 		}
 		TypeOf {
 			return 'typeof($x.expr.str())'

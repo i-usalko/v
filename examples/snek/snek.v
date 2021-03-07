@@ -1,9 +1,8 @@
 import gg
 import gx
-import sokol.sapp
+// import sokol.sapp
 import time
 import rand
-import os
 
 // constants
 const (
@@ -37,11 +36,11 @@ enum Direction {
 
 struct App {
 mut:
-	gg    &gg.Context
-	score int
-	snake []Pos
-	dir   Direction
-	food  Pos
+	gg         &gg.Context
+	score      int
+	snake      []Pos
+	dir        Direction
+	food       Pos
 	start_time i64
 	last_tick  i64
 }
@@ -74,7 +73,7 @@ fn (mut app App) move_food() {
 }
 
 // events
-fn on_keydown(key sapp.KeyCode, mod sapp.Modifier, mut app App) {
+fn on_keydown(key gg.KeyCode, mod gg.Modifier, mut app App) {
 	match key {
 		.w, .up {
 			if app.dir != .down {
@@ -157,14 +156,15 @@ fn on_frame(mut app App) {
 		app.reset_game()
 	}
 	// checking if snake hit a wall
-	if app.snake[0].x < 0 ||
-		app.snake[0].x >= game_size || app.snake[0].y < 0 || app.snake[0].y >= game_size
-	{
+	if app.snake[0].x < 0 || app.snake[0].x >= game_size || app.snake[0].y < 0
+		|| app.snake[0].y >= game_size {
 		app.reset_game()
 	}
 
 	app.gg.end()
 }
+
+const font = $embed_file('../assets/fonts/RobotoMono-Regular.ttf')
 
 // setup
 fn main() {
@@ -172,6 +172,11 @@ fn main() {
 		gg: 0
 	}
 	app.reset_game()
+
+	mut font_copy := font
+	font_bytes := unsafe {
+		font_copy.data().vbytes(font_copy.len)
+	}
 
 	app.gg = gg.new_context(
 		bg_color: gx.white
@@ -184,7 +189,7 @@ fn main() {
 		create_window: true
 		resizable: false
 		window_title: 'snek'
-		font_path: os.resource_abs_path(os.join_path('../assets/fonts/', 'RobotoMono-Regular.ttf'))
+		font_bytes_normal: font_bytes
 	)
 
 	app.gg.run()

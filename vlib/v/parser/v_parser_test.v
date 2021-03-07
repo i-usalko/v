@@ -2,7 +2,7 @@ module parser
 
 // import v.eval
 import v.ast
-import v.gen
+import v.gen.c
 import v.table
 import v.checker
 import v.pref
@@ -83,7 +83,7 @@ x := 10
 	prog := parse_file(s, table, .skip_comments, vpref, gscope)
 	mut checker := checker.new_checker(table, vpref)
 	checker.check(prog)
-	res := gen.cgen([prog], table, vpref)
+	res := c.gen([prog], table, vpref)
 	println(res)
 }
 
@@ -111,7 +111,7 @@ fn test_one() {
 	}
 	mut checker := checker.new_checker(table, vpref)
 	checker.check(program)
-	res := gen.cgen([program], table, vpref).replace('\n', '').trim_space().after('#endif')
+	res := c.gen([program], table, vpref).replace('\n', '').trim_space().after('#endif')
 	println(res)
 	ok := expected == res
 	println(res)
@@ -151,7 +151,7 @@ fn test_parse_expr() {
 		global_scope: scope
 	}
 	checker.check(program)
-	res := gen.cgen([program], table, vpref).after('#endif')
+	res := c.gen([program], table, vpref).after('#endif')
 	println('========')
 	println(res)
 	println('========')
@@ -173,6 +173,39 @@ fn test_parse_expr() {
 			break
 		}
 	}
+}
+
+fn test_num_literals() {
+	inputs := [
+		'a := -1',
+		'b := -12.e17',
+		'c := -12.',
+		'd := -a',
+	]
+	table := table.new_table()
+	mut scope := &ast.Scope{
+		start_pos: 0
+		parent: 0
+	}
+	mut rhs_types := []string{}
+	for input in inputs {
+		stmt := parse_stmt(input, table, scope)
+		r := (stmt as ast.AssignStmt).right
+		match r[0] {
+			ast.IntegerLiteral { rhs_types << 'int literal' }
+			ast.FloatLiteral { rhs_types << 'float literal' }
+			ast.PrefixExpr { rhs_types << 'prefix expression' }
+			else { rhs_types << 'something else' }
+		}
+	}
+	mut rhs_type := rhs_types[0]
+	assert rhs_type == 'int literal'
+	rhs_type = rhs_types[1]
+	assert rhs_type == 'float literal'
+	rhs_type = rhs_types[2]
+	assert rhs_type == 'float literal'
+	rhs_type = rhs_types[3]
+	assert rhs_type == 'prefix expression'
 }
 
 /*

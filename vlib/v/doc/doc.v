@@ -113,6 +113,7 @@ pub fn new(input_path string) Doc {
 		time_generated: time.now()
 	}
 	d.fmt = fmt.Fmt{
+		pref: d.prefs
 		indent: 0
 		is_debug: false
 		table: d.table
@@ -217,7 +218,7 @@ pub fn (mut d Doc) stmt(stmt ast.Stmt, filename string) ?DocNode {
 						kind: .variable
 						parent_name: node.name
 						pos: d.convert_pos(filename, param.pos)
-						attrs: {
+						attrs: map{
 							'mut': param.is_mut.str()
 						}
 						return_type: d.type_to_str(param.typ)
@@ -352,7 +353,7 @@ pub fn (mut d Doc) generate() ? {
 		os.real_path(os.dir(d.base_path))
 	}
 	d.is_vlib = 'vlib' !in d.base_path
-	project_files := os.ls(d.base_path) or { return error_with_code(err, 0) }
+	project_files := os.ls(d.base_path) or { return err }
 	v_files := d.prefs.should_compile_filtered_files(d.base_path, project_files)
 	if v_files.len == 0 {
 		return error_with_code('vdoc: No valid V files were found.', 1)
@@ -372,8 +373,7 @@ pub fn (mut d Doc) generate() ? {
 		}
 		filename := os.base(file_path)
 		d.sources[filename] = util.read_file(file_path) or { '' }
-		file_asts <<
-			parser.parse_file(file_path, d.table, comments_mode, d.prefs, global_scope)
+		file_asts << parser.parse_file(file_path, d.table, comments_mode, d.prefs, global_scope)
 	}
 	return d.file_asts(file_asts)
 }

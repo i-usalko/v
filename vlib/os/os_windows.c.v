@@ -3,6 +3,7 @@ module os
 import strings
 
 #include <process.h>
+
 pub const (
 	path_separator = '\\'
 	path_delimiter = ';'
@@ -78,7 +79,7 @@ mut:
 fn init_os_args_wide(argc int, argv &byteptr) []string {
 	mut args_ := []string{}
 	for i in 0 .. argc {
-		args_ << string_from_wide(unsafe { &u16(argv[i]) })
+		args_ << unsafe { string_from_wide(&u16(argv[i])) }
 	}
 	return args_
 }
@@ -101,12 +102,12 @@ pub fn ls(path string) ?[]string {
 	// NOTE:TODO: once we have a way to convert utf16 wide character to utf8
 	// we should use FindFirstFileW and FindNextFileW
 	h_find_files := C.FindFirstFile(path_files.to_wide(), voidptr(&find_file_data))
-	first_filename := string_from_wide(&u16(find_file_data.c_file_name))
+	first_filename := unsafe { string_from_wide(&find_file_data.c_file_name[0]) }
 	if first_filename != '.' && first_filename != '..' {
 		dir_files << first_filename
 	}
 	for C.FindNextFile(h_find_files, voidptr(&find_file_data)) > 0 {
-		filename := string_from_wide(&u16(find_file_data.c_file_name))
+		filename := unsafe { string_from_wide(&find_file_data.c_file_name[0]) }
 		if filename != '.' && filename != '..' {
 			dir_files << filename.clone()
 		}
@@ -135,7 +136,8 @@ pub fn mkdir(path string) ?bool {
 	}
 	apath := real_path(path)
 	if !C.CreateDirectory(apath.to_wide(), 0) {
-		return error('mkdir failed for "$apath", because CreateDirectory returned ' + get_error_msg(int(C.GetLastError())))
+		return error('mkdir failed for "$apath", because CreateDirectory returned ' +
+			get_error_msg(int(C.GetLastError())))
 	}
 	return true
 }
@@ -198,11 +200,12 @@ const (
 fn ptr_win_get_error_msg(code u32) voidptr {
 	mut buf := voidptr(0)
 	// Check for code overflow
-	if code > u32(max_error_code) {
+	if code > u32(os.max_error_code) {
 		return buf
 	}
-	C.FormatMessage(format_message_allocate_buffer | format_message_from_system | format_message_ignore_inserts,
-		0, code, C.MAKELANGID(lang_neutral, sublang_default), voidptr(&buf), 0, 0)
+	C.FormatMessage(os.format_message_allocate_buffer | os.format_message_from_system | os.format_message_ignore_inserts,
+		0, code, C.MAKELANGID(os.lang_neutral, os.sublang_default), voidptr(&buf), 0,
+		0)
 	return buf
 }
 
@@ -215,7 +218,7 @@ pub fn get_error_msg(code int) string {
 	if ptr_text == 0 { // compare with null
 		return ''
 	}
-	return string_from_wide(ptr_text)
+	return unsafe { string_from_wide(ptr_text) }
 }
 
 // exec starts the specified command, waits for it to complete, and returns its output.
@@ -270,15 +273,17 @@ pub fn exec(cmd string) ?Result {
 	mut bytes_read := u32(0)
 	mut read_data := strings.new_builder(1024)
 	for {
-		readfile_result := C.ReadFile(child_stdout_read, buf, 1000, voidptr(&bytes_read),
-			0)
-		read_data.write_bytes(buf, int(bytes_read))
-		if readfile_result == false || int(bytes_read) == 0 {
+		mut result := false
+		unsafe {
+			result = C.ReadFile(child_stdout_read, buf, 1000, voidptr(&bytes_read), 0)
+			read_data.write_bytes(&buf[0], int(bytes_read))
+		}
+		if result == false || int(bytes_read) == 0 {
 			break
 		}
 	}
 	soutput := read_data.str().trim_space()
-	read_data.free()
+	unsafe { read_data.free() }
 	exit_code := u32(0)
 	C.WaitForSingleObject(proc_info.h_process, C.INFINITE)
 	C.GetExitCodeProcess(proc_info.h_process, voidptr(&exit_code))
@@ -381,7 +386,7 @@ pub fn is_writable_folder(folder string) ?bool {
 		return error('cannot write to folder $folder: $err')
 	}
 	f.close()
-	rm(tmp_perm_check)
+	rm(tmp_perm_check) ?
 	return true
 }
 

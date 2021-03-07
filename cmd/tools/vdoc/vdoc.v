@@ -80,9 +80,9 @@ fn (vd VDoc) gen_json(d doc.Doc) string {
 	} else {
 		d.head.merge_comments_without_examples()
 	}
-	jw.write('{"module_name":"$d.head.name","description":"${escape(comments)}","contents":')
-	jw.write(json.encode(d.contents.keys().map(d.contents[it])))
-	jw.write(',"generator":"vdoc","time_generated":"$d.time_generated.str()"}')
+	jw.write_string('{"module_name":"$d.head.name","description":"${escape(comments)}","contents":')
+	jw.write_string(json.encode(d.contents.keys().map(d.contents[it])))
+	jw.write_string(',"generator":"vdoc","time_generated":"$d.time_generated.str()"}')
 	return jw.str()
 }
 
@@ -162,7 +162,7 @@ fn (vd VDoc) work_processor(mut work sync.Channel, mut wg sync.WaitGroup) {
 		file_name, content := vd.render_doc(pdoc.d, pdoc.out)
 		output_path := os.join_path(pdoc.out.path, file_name)
 		println('Generating $pdoc.out.typ in "$output_path"')
-		os.write_file(output_path, content)
+		os.write_file(output_path, content) or { panic(err) }
 	}
 	wg.done()
 }
@@ -210,10 +210,10 @@ fn (vd VDoc) get_readme(path string) string {
 	return readme_contents
 }
 
-fn (vd VDoc) emit_generate_err(err string, errcode int) {
+fn (vd VDoc) emit_generate_err(err Error) {
 	cfg := vd.cfg
-	mut err_msg := err
-	if errcode == 1 {
+	mut err_msg := err.msg
+	if err.code == 1 {
 		mod_list := get_modules_list(cfg.input_path, []string{})
 		println('Available modules:\n==================')
 		for mod in mod_list {
@@ -288,12 +288,12 @@ fn (mut vd VDoc) generate_docs_from_file() {
 		vd.vprintln('Generating $out.typ docs for "$dirpath"')
 		if is_local_and_single {
 			dcs = doc.generate_with_pos(dirpath, cfg.local_filename, cfg.local_pos) or {
-				vd.emit_generate_err(err, errcode)
+				vd.emit_generate_err(err)
 				exit(1)
 			}
 		} else {
 			dcs = doc.generate(dirpath, cfg.pub_only, true) or {
-				vd.emit_generate_err(err, errcode)
+				vd.emit_generate_err(err)
 				exit(1)
 			}
 		}
@@ -358,7 +358,7 @@ fn (mut vd VDoc) generate_docs_from_file() {
 				os.mkdir(out.path) or { panic(err) }
 			} else {
 				for fname in css_js_assets {
-					os.rm(os.join_path(out.path, fname))
+					os.rm(os.join_path(out.path, fname)) or { panic(err) }
 				}
 			}
 		}
@@ -366,8 +366,8 @@ fn (mut vd VDoc) generate_docs_from_file() {
 			vd.render_static_html(out)
 		}
 		vd.render_parallel(out)
-		println('Creating search index...')
 		if out.typ == .html {
+			println('Creating search index...')
 			vd.collect_search_index(out)
 			vd.render_search_index(out)
 			// move favicons to target directory
@@ -376,7 +376,7 @@ fn (mut vd VDoc) generate_docs_from_file() {
 			for favicon in favicons {
 				favicon_path := os.join_path(favicons_path, favicon)
 				destination_path := os.join_path(out.path, favicon)
-				os.cp(favicon_path, destination_path)
+				os.cp(favicon_path, destination_path) or { panic(err) }
 			}
 		}
 	}
@@ -467,8 +467,8 @@ fn parse_arguments(args []string) Config {
 	} $else {
 		cfg.input_path = cfg.input_path.replace('\\', os.path_separator)
 	}
-	is_path := cfg.input_path.ends_with('.v') || cfg.input_path.split(os.path_separator).len >
-		1 || cfg.input_path == '.'
+	is_path := cfg.input_path.ends_with('.v') || cfg.input_path.split(os.path_separator).len > 1
+		|| cfg.input_path == '.'
 	if cfg.input_path.trim_right('/') == 'vlib' {
 		cfg.is_vlib = true
 		cfg.is_multi = true

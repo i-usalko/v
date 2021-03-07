@@ -89,7 +89,8 @@ pub fn new224() &Digest {
 	return d
 }
 
-fn (mut d Digest) write(p_ []byte) int {
+// write writes the contents of `p_` to the internal hash representation.
+fn (mut d Digest) write(p_ []byte) ?int {
 	unsafe {
 		mut p := p_
 		nn := p.len
@@ -146,14 +147,14 @@ fn (mut d Digest) checksum() []byte {
 	mut tmp := []byte{len: (64)}
 	tmp[0] = 0x80
 	if int(len) % 64 < 56 {
-		d.write(tmp[..56 - int(len) % 64])
+		d.write(tmp[..56 - int(len) % 64]) or { panic(err) }
 	} else {
-		d.write(tmp[..64 + 56 - int(len) % 64])
+		d.write(tmp[..64 + 56 - int(len) % 64]) or { panic(err) }
 	}
 	// Length in bits.
 	len <<= u64(3)
 	binary.big_endian_put_u64(mut tmp, len)
-	d.write(tmp[..8])
+	d.write(tmp[..8]) or { panic(err) }
 	if d.nx != 0 {
 		panic('d.nx != 0')
 	}
@@ -171,7 +172,8 @@ fn (mut d Digest) checksum() []byte {
 	return digest
 }
 
-// sum256 returns the SHA256 checksum of the data.
+// sum returns the SHA256 checksum of the bytes in `data`.
+// Example: assert sha256.sum('V'.bytes()).len > 0 == true
 pub fn sum(data []byte) []byte {
 	return sum256(data)
 }
@@ -179,14 +181,14 @@ pub fn sum(data []byte) []byte {
 // sum256 returns the SHA256 checksum of the data.
 pub fn sum256(data []byte) []byte {
 	mut d := new()
-	d.write(data)
+	d.write(data) or { panic(err) }
 	return d.checksum()
 }
 
 // sum224 returns the SHA224 checksum of the data.
 pub fn sum224(data []byte) []byte {
 	mut d := new224()
-	d.write(data)
+	d.write(data) or { panic(err) }
 	sum := d.checksum()
 	sum224 := []byte{len: (size224)}
 	copy(sum224, sum[..size224])
@@ -199,6 +201,7 @@ fn block(mut dig Digest, p []byte) {
 	block_generic(mut dig, p)
 }
 
+// size returns the size of the checksum in bytes.
 pub fn (d &Digest) size() int {
 	if !d.is224 {
 		return size
@@ -206,14 +209,18 @@ pub fn (d &Digest) size() int {
 	return size224
 }
 
+// block_size returns the block size of the checksum in bytes.
 pub fn (d &Digest) block_size() int {
 	return block_size
 }
 
+// hexhash returns a hexadecimal SHA256 hash sum `string` of `s`.
+// Example: assert sha256.hexhash('V') == 'de5a6f78116eca62d7fc5ce159d23ae6b889b365a1739ad2cf36f925a140d0cc'
 pub fn hexhash(s string) string {
 	return sum256(s.bytes()).hex()
 }
 
+// hexhash_224 returns a hexadecimal SHA224 hash sum `string` of `s`.
 pub fn hexhash_224(s string) string {
 	return sum224(s.bytes()).hex()
 }

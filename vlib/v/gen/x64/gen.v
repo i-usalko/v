@@ -31,6 +31,8 @@ mut:
 	debug_pos            int
 	errors               []errors.Error
 	warnings             []errors.Warning
+	syms                 []Symbol
+	relocs               []Reloc
 }
 
 // string_addr map[string]i64
@@ -173,6 +175,15 @@ fn (mut g Gen) write_string(s string) {
 	}
 }
 
+fn (mut g Gen) write_string_with_padding(s string, max int) {
+	for c in s {
+		g.write8(int(c))
+	}
+	for _ in 0 .. max - s.len {
+		g.write8(0)
+	}
+}
+
 fn (mut g Gen) inc(reg Register) {
 	g.write16(0xff49)
 	match reg {
@@ -249,11 +260,7 @@ fn (mut g Gen) jmp(addr int) {
 }
 
 fn abs(a i64) i64 {
-	return if a < 0 {
-		-a
-	} else {
-		a
-	}
+	return if a < 0 { -a } else { a }
 }
 
 fn (mut g Gen) jle(addr i64) {
@@ -610,16 +617,16 @@ pub fn (mut g Gen) call_fn(node ast.CallExpr) {
 		match expr {
 			ast.IntegerLiteral {
 				// `foo(2)` => `mov edi,0x2`
-				g.mov(fn_arg_registers[i], expr.val.int())
+				g.mov(x64.fn_arg_registers[i], expr.val.int())
 			}
 			ast.Ident {
 				// `foo(x)` => `mov edi,DWORD PTR [rbp-0x8]`
 				var_offset := g.get_var_offset(expr.name)
 				if g.pref.is_verbose {
 					println('i=$i fn name= $name offset=$var_offset')
-					println(int(fn_arg_registers[i]))
+					println(int(x64.fn_arg_registers[i]))
 				}
-				g.mov_var_to_reg(fn_arg_registers[i], var_offset)
+				g.mov_var_to_reg(x64.fn_arg_registers[i], var_offset)
 			}
 			else {
 				verror('unhandled call_fn (name=$name) node: ' + expr.type_name())
@@ -676,7 +683,7 @@ fn (mut g Gen) stmt(node ast.Stmt) {
 	}
 }
 
-fn C.strtol() int
+fn C.strtol(str charptr, endptr &&char, base int) int
 
 fn (mut g Gen) expr(node ast.Expr) {
 	// println('cgen expr()')
@@ -877,7 +884,7 @@ fn (mut g Gen) fn_decl(node ast.FnDecl) {
 		g.allocate_var(name, 4, 0)
 		// `mov DWORD PTR [rbp-0x4],edi`
 		offset += 4
-		g.mov_reg_to_rbp(offset, fn_arg_registers[i])
+		g.mov_reg_to_rbp(offset, x64.fn_arg_registers[i])
 	}
 	//
 	g.stmts(node.stmts)

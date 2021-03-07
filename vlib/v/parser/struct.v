@@ -65,7 +65,8 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 		p.error('`$p.tok.lit` lacks body')
 		return ast.StructDecl{}
 	}
-	if language == .v && !p.builtin_mod && name.len > 0 && !name[0].is_capital() && !p.pref.translated {
+	if language == .v && !p.builtin_mod && name.len > 0 && !name[0].is_capital()
+		&& !p.pref.translated {
 		p.error_with_pos('struct name `$name` must begin with capital letter', name_pos)
 		return ast.StructDecl{}
 	}
@@ -120,7 +121,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 						return ast.StructDecl{}
 					}
 					p.next()
-					pub_mut_pos = fields.len
+					pub_mut_pos = ast_fields.len
 					is_field_pub = true
 					is_field_mut = true
 					is_field_global = false
@@ -129,7 +130,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 						p.error('redefinition of `pub` section')
 						return ast.StructDecl{}
 					}
-					pub_pos = fields.len
+					pub_pos = ast_fields.len
 					is_field_pub = true
 					is_field_mut = false
 					is_field_global = false
@@ -142,7 +143,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				}
 				p.next()
 				p.check(.colon)
-				mut_pos = fields.len
+				mut_pos = ast_fields.len
 				is_field_pub = false
 				is_field_mut = true
 				is_field_global = false
@@ -153,7 +154,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				}
 				p.next()
 				p.check(.colon)
-				global_pos = fields.len
+				global_pos = ast_fields.len
 				is_field_pub = true
 				is_field_mut = true
 				is_field_global = true
@@ -164,7 +165,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				}
 				p.next()
 				p.check(.colon)
-				module_pos = fields.len
+				module_pos = ast_fields.len
 				is_field_pub = false
 				is_field_mut = false
 				is_field_global = false
@@ -176,9 +177,8 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				}
 			}
 			field_start_pos := p.tok.position()
-			is_embed := ((p.tok.lit.len > 1 && p.tok.lit[0].is_capital()) ||
-				p.peek_tok.kind == .dot) &&
-				language == .v
+			is_embed := ((p.tok.lit.len > 1 && p.tok.lit[0].is_capital())
+				|| p.peek_tok.kind == .dot) && language == .v && p.peek_tok.kind != .key_fn
 			is_on_top := ast_fields.len == 0 && !(is_field_mut || is_field_mut || is_field_global)
 			mut field_name := ''
 			mut typ := table.Type(0)
@@ -234,7 +234,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				field_pos = field_start_pos.extend(type_pos)
 			}
 			// Comments after type (same line)
-			comments << p.eat_comments()
+			comments << p.eat_comments({})
 			if p.tok.kind == .lsbr {
 				// attrs are stored in `p.attrs`
 				p.attributes()
@@ -252,7 +252,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 						else {}
 					}
 					has_default_expr = true
-					comments << p.eat_comments()
+					comments << p.eat_comments({})
 				}
 				// TODO merge table and ast Fields?
 				ast_fields << ast.StructField{
@@ -273,16 +273,8 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 				typ: typ
 				default_expr: ast.ex2fe(default_expr)
 				has_default_expr: has_default_expr
-				is_pub: if is_embed {
-					true
-				} else {
-					is_field_pub
-				}
-				is_mut: if is_embed {
-					true
-				} else {
-					is_field_mut
-				}
+				is_pub: if is_embed { true } else { is_field_pub }
+				is_mut: if is_embed { true } else { is_field_mut }
 				is_global: is_field_global
 				attrs: p.attrs
 			}
@@ -303,7 +295,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 			fields: fields
 			is_typedef: attrs.contains('typedef')
 			is_union: is_union
-			is_ref_only: attrs.contains('ref_only')
+			is_heap: attrs.contains('heap')
 			generic_types: generic_types
 			attrs: attrs
 		}
@@ -328,10 +320,11 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 		is_pub: is_pub
 		fields: ast_fields
 		pos: start_pos.extend_with_last_line(name_pos, last_line)
-		mut_pos: mut_pos - embeds.len
-		pub_pos: pub_pos - embeds.len
-		pub_mut_pos: pub_mut_pos - embeds.len
-		module_pos: module_pos - embeds.len
+		mut_pos: mut_pos
+		pub_pos: pub_pos
+		pub_mut_pos: pub_mut_pos
+		global_pos: global_pos
+		module_pos: module_pos
 		language: language
 		is_union: is_union
 		attrs: attrs
@@ -350,7 +343,7 @@ fn (mut p Parser) struct_init(short_syntax bool) ast.StructInit {
 	if !short_syntax {
 		p.check(.lcbr)
 	}
-	pre_comments := p.eat_comments()
+	pre_comments := p.eat_comments({})
 	mut fields := []ast.StructInitField{}
 	mut i := 0
 	no_keys := p.peek_tok.kind != .colon && p.tok.kind != .rcbr && p.tok.kind != .ellipsis // `Vec{a,b,c}
@@ -371,22 +364,25 @@ fn (mut p Parser) struct_init(short_syntax bool) ast.StructInit {
 			// name will be set later in checker
 			expr = p.expr(0)
 			field_pos = expr.position()
-			comments = p.eat_line_end_comments()
+			comments = p.eat_comments(same_line: true)
 		} else if is_update_expr {
 			// struct updating syntax; f2 := Foo{ ...f, name: 'f2' }
 			p.check(.ellipsis)
 			update_expr = p.expr(0)
-			update_expr_comments << p.eat_line_end_comments()
+			update_expr_comments << p.eat_comments(same_line: true)
 			has_update_expr = true
 		} else {
 			first_field_pos := p.tok.position()
 			field_name = p.check_name()
 			p.check(.colon)
 			expr = p.expr(0)
-			comments = p.eat_line_end_comments()
+			comments = p.eat_comments(same_line: true)
 			last_field_pos := expr.position()
-			field_len := if last_field_pos.len > 0 { last_field_pos.pos - first_field_pos.pos +
-					last_field_pos.len } else { first_field_pos.len + 1 }
+			field_len := if last_field_pos.len > 0 {
+				last_field_pos.pos - first_field_pos.pos + last_field_pos.len
+			} else {
+				first_field_pos.len + 1
+			}
 			field_pos = token.Position{
 				line_nr: first_field_pos.line_nr
 				pos: first_field_pos.pos
@@ -397,8 +393,8 @@ fn (mut p Parser) struct_init(short_syntax bool) ast.StructInit {
 		if p.tok.kind == .comma {
 			p.next()
 		}
-		comments << p.eat_line_end_comments()
-		nline_comments << p.eat_comments()
+		comments << p.eat_comments(same_line: true)
+		nline_comments << p.eat_comments({})
 		if !is_update_expr {
 			fields << ast.StructInitField{
 				name: field_name
@@ -414,7 +410,8 @@ fn (mut p Parser) struct_init(short_syntax bool) ast.StructInit {
 		p.check(.rcbr)
 	}
 	p.is_amp = saved_is_amp
-	node := ast.StructInit{
+	return ast.StructInit{
+		unresolved: typ.has_flag(.generic)
 		typ: typ
 		fields: fields
 		update_expr: update_expr
@@ -424,7 +421,6 @@ fn (mut p Parser) struct_init(short_syntax bool) ast.StructInit {
 		is_short: no_keys
 		pre_comments: pre_comments
 	}
-	return node
 }
 
 fn (mut p Parser) interface_decl() ast.InterfaceDecl {
@@ -439,7 +435,7 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 	interface_name := p.prepend_mod(p.check_name()).clone()
 	// println('interface decl $interface_name')
 	p.check(.lcbr)
-	pre_comments := p.eat_comments()
+	pre_comments := p.eat_comments({})
 	// Declare the type
 	reg_idx := p.table.register_type_symbol(
 		is_public: is_pub
@@ -458,67 +454,120 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 	}
 	typ := table.new_type(reg_idx)
 	mut ts := p.table.get_type_symbol(typ)
+	mut info := ts.info as table.Interface
 	// if methods were declared before, it's an error, ignore them
 	ts.methods = []table.Fn{cap: 20}
-	// Parse methods
+	// Parse fields or methods
+	mut fields := []ast.StructField{cap: 20}
 	mut methods := []ast.FnDecl{cap: 20}
+	mut is_mut := false
+	mut mut_pos := -1
 	for p.tok.kind != .rcbr && p.tok.kind != .eof {
-		ts = p.table.get_type_symbol(typ) // removing causes memory bug visible by `v -silent test-fmt`
-		method_start_pos := p.tok.position()
-		line_nr := p.tok.line_nr
-		name := p.check_name()
-		if ts.has_method(name) {
-			p.error_with_pos('duplicate method `$name`', method_start_pos)
-			return ast.InterfaceDecl{}
+		if p.tok.kind == .key_mut {
+			if is_mut {
+				p.error_with_pos('redefinition of `mut` section', p.tok.position())
+				return {}
+			}
+			p.next()
+			p.check(.colon)
+			is_mut = true
+			mut_pos = fields.len
 		}
-		if util.contains_capital(name) {
-			p.error('interface methods cannot contain uppercase letters, use snake_case instead')
-			return ast.InterfaceDecl{}
+		if p.peek_tok.kind == .lpar {
+			method_start_pos := p.tok.position()
+			line_nr := p.tok.line_nr
+			name := p.check_name()
+			if name == 'type_name' {
+				p.error_with_pos('cannot override built-in method `type_name`', method_start_pos)
+				return ast.InterfaceDecl{}
+			}
+			if ts.has_method(name) {
+				p.error_with_pos('duplicate method `$name`', method_start_pos)
+				return ast.InterfaceDecl{}
+			}
+			if util.contains_capital(name) {
+				p.error('interface methods cannot contain uppercase letters, use snake_case instead')
+				return ast.InterfaceDecl{}
+			}
+			// field_names << name
+			args2, _, is_variadic := p.fn_args() // TODO merge table.Param and ast.Arg to avoid this
+			mut args := [table.Param{
+				name: 'x'
+				is_mut: is_mut
+				typ: typ
+				is_hidden: true
+			}]
+			args << args2
+			mut method := ast.FnDecl{
+				name: name
+				mod: p.mod
+				params: args
+				file: p.file_name
+				return_type: table.void_type
+				is_variadic: is_variadic
+				is_pub: true
+				pos: method_start_pos.extend(p.prev_tok.position())
+				scope: p.scope
+			}
+			if p.tok.kind.is_start_of_type() && p.tok.line_nr == line_nr {
+				method.return_type = p.parse_type()
+			}
+			mcomments := p.eat_comments(same_line: true)
+			mnext_comments := p.eat_comments({})
+			method.comments = mcomments
+			method.next_comments = mnext_comments
+			methods << method
+			// println('register method $name')
+			tmethod := table.Fn{
+				name: name
+				params: args
+				return_type: method.return_type
+				is_variadic: is_variadic
+				is_pub: true
+			}
+			ts.register_method(tmethod)
+			info.methods << tmethod
+		} else {
+			// interface fields
+			field_pos := p.tok.position()
+			field_name := p.check_name()
+			mut type_pos := p.tok.position()
+			field_typ := p.parse_type()
+			type_pos = type_pos.extend(p.prev_tok.position())
+			mut comments := []ast.Comment{}
+			for p.tok.kind == .comment {
+				comments << p.comment()
+				if p.tok.kind == .rcbr {
+					break
+				}
+			}
+			fields << ast.StructField{
+				name: field_name
+				pos: field_pos
+				type_pos: type_pos
+				typ: field_typ
+				comments: comments
+				is_public: true
+			}
+			info.fields << table.Field{
+				name: field_name
+				typ: field_typ
+				is_pub: true
+				is_mut: is_mut
+			}
 		}
-		// field_names << name
-		args2, _, is_variadic := p.fn_args() // TODO merge table.Param and ast.Arg to avoid this
-		mut args := [table.Param{
-			name: 'x'
-			typ: typ
-			is_hidden: true
-		}]
-		args << args2
-		mut method := ast.FnDecl{
-			name: name
-			mod: p.mod
-			params: args
-			file: p.file_name
-			return_type: table.void_type
-			is_variadic: is_variadic
-			is_pub: true
-			pos: method_start_pos.extend(p.prev_tok.position())
-			scope: p.scope
-		}
-		if p.tok.kind.is_start_of_type() && p.tok.line_nr == line_nr {
-			method.return_type = p.parse_type()
-		}
-		mcomments := p.eat_line_end_comments()
-		mnext_comments := p.eat_comments()
-		method.comments = mcomments
-		method.next_comments = mnext_comments
-		methods << method
-		// println('register method $name')
-		ts.register_method(
-			name: name
-			params: args
-			return_type: method.return_type
-			is_variadic: is_variadic
-			is_pub: true
-		)
 	}
+	ts.info = info
 	p.top_level_statement_end()
 	p.check(.rcbr)
 	pos.update_last_line(p.prev_tok.line_nr)
 	return ast.InterfaceDecl{
 		name: interface_name
+		fields: fields
 		methods: methods
 		is_pub: is_pub
 		pos: pos
 		pre_comments: pre_comments
+		mut_pos: mut_pos
 	}
 }

@@ -4,6 +4,7 @@ module big
 #flag -I @VROOT/thirdparty/bignum
 #flag @VROOT/thirdparty/bignum/bn.o
 #include "bn.h"
+
 struct C.bn {
 mut:
 	array [32]u32
@@ -112,7 +113,7 @@ pub fn from_string(input string) Number {
 	mut n := from_int(0)
 	for _, c in input {
 		d := from_int(int(c - `0`))
-		n = (n * ten) + d
+		n = (n * big.ten) + d
 	}
 	return n
 }
@@ -136,7 +137,7 @@ pub fn (n Number) str() string {
 	mut x := n.clone()
 	div := Number{}
 	for !x.is_zero() {
-		mod := divmod(&x, &ten, &div)
+		mod := divmod(&x, &big.ten, &div)
 		digits << byte(mod.int()) + `0`
 		x = div
 	}
@@ -146,9 +147,13 @@ pub fn (n Number) str() string {
 // .hexstr returns a hexadecimal representation of the bignum `n`
 pub fn (n Number) hexstr() string {
 	mut buf := [8192]byte{}
-	// NB: C.bignum_to_string(), returns the HEXADECIMAL representation of the bignum n
-	C.bignum_to_string(&n, buf, 8192)
-	s := tos_clone(buf)
+	mut s := ''
+	unsafe {
+		bp := &buf[0]
+		// NB: C.bignum_to_string(), returns the HEXADECIMAL representation of the bignum n
+		C.bignum_to_string(&n, bp, 8192)
+		s = tos_clone(bp)
+	}
 	if s.len == 0 {
 		return '0'
 	}
