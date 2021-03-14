@@ -3,6 +3,7 @@
 // that can be found in the LICENSE file.
 module fmt
 
+import math.mathutil as mu
 import v.ast
 import v.table
 import strings
@@ -11,9 +12,6 @@ import v.pref
 
 const (
 	bs      = '\\'
-	tabs    = ['', '\t', '\t\t', '\t\t\t', '\t\t\t\t', '\t\t\t\t\t', '\t\t\t\t\t\t', '\t\t\t\t\t\t\t',
-		'\t\t\t\t\t\t\t\t',
-	]
 	// when to break a line dependant on penalty
 	max_len = [0, 35, 60, 85, 93, 100]
 )
@@ -73,7 +71,7 @@ pub fn fmt(file ast.File, table &table.Table, pref &pref.Preferences, is_debug b
 	if res.len == 1 {
 		return f.out_imports.str().trim_space() + '\n'
 	}
-	bounded_import_pos := util.imin(res.len, f.import_pos)
+	bounded_import_pos := mu.min(res.len, f.import_pos)
 	return res[..bounded_import_pos] + f.out_imports.str() + res[bounded_import_pos..]
 }
 
@@ -110,14 +108,7 @@ pub fn (mut f Fmt) writeln(s string) {
 }
 
 fn (mut f Fmt) write_indent() {
-	if f.indent < fmt.tabs.len {
-		f.out.write_string(fmt.tabs[f.indent])
-	} else {
-		// too many indents, do it the slow way:
-		for _ in 0 .. f.indent {
-			f.out.write_string('\t')
-		}
-	}
+	f.out.write_string(util.tabs(f.indent))
 	f.line_len += f.indent * 4
 }
 
@@ -388,7 +379,7 @@ pub fn (mut f Fmt) stmt_str(node ast.Stmt) string {
 
 pub fn (mut f Fmt) stmt(node ast.Stmt) {
 	if f.is_debug {
-		eprintln('stmt: ${node.position():-42} | node: ${node.type_name():-20}')
+		eprintln('stmt: ${node.pos:-42} | node: ${node.type_name():-20}')
 	}
 	match node {
 		ast.AssignStmt {
@@ -996,10 +987,15 @@ pub fn (mut f Fmt) comptime_call(node ast.ComptimeCall) {
 		} else if node.is_env {
 			f.write("\$env('$node.args_var')")
 		} else {
-			method_expr := if node.has_parens {
-				'(${node.method_name}($node.args_var))'
+			inner_args := if node.args_var != '' {
+				node.args_var
 			} else {
-				'${node.method_name}($node.args_var)'
+				node.args.map(it.str()).join(', ')
+			}
+			method_expr := if node.has_parens {
+				'(${node.method_name}($inner_args))'
+			} else {
+				'${node.method_name}($inner_args)'
 			}
 			f.write('${node.left}.$$method_expr')
 		}
@@ -1836,8 +1832,10 @@ pub fn (mut f Fmt) array_init(node ast.ArrayInit) {
 					set_comma = true
 				}
 				if cmt.pos.line_nr > expr_pos.last_line {
+					embed := i + 1 < node.exprs.len
+						&& node.exprs[i + 1].position().line_nr == cmt.pos.last_line
 					f.writeln('')
-					f.comment(cmt, {})
+					f.comment(cmt, iembed: embed)
 				} else {
 					f.write(' ')
 					f.comment(cmt, iembed: true)
@@ -1915,11 +1913,11 @@ pub fn (mut f Fmt) map_init(it ast.MapInit) {
 	f.write('}')
 }
 
-pub fn (mut f Fmt) const_decl(it ast.ConstDecl) {
-	if it.is_pub {
+pub fn (mut f Fmt) const_decl(node ast.ConstDecl) {
+	if node.is_pub {
 		f.write('pub ')
 	}
-	if it.fields.len == 0 && it.pos.line_nr == it.pos.last_line {
+	if node.fields.len == 0 && node.pos.line_nr == node.pos.last_line {
 		f.writeln('const ()\n')
 		return
 	}
@@ -1928,18 +1926,18 @@ pub fn (mut f Fmt) const_decl(it ast.ConstDecl) {
 		f.inside_const = false
 	}
 	f.write('const ')
-	if it.is_block {
-		f.writeln('(')
-	}
 	mut max := 0
-	for field in it.fields {
-		if field.name.len > max {
-			max = field.name.len
+	if node.is_block {
+		f.writeln('(')
+		for field in node.fields {
+			if field.name.len > max {
+				max = field.name.len
+			}
 		}
+		f.indent++
 	}
-	f.indent++
-	mut prev_field := if it.fields.len > 0 { ast.Node(it.fields[0]) } else { ast.Node{} }
-	for field in it.fields {
+	mut prev_field := if node.fields.len > 0 { ast.Node(node.fields[0]) } else { ast.Node{} }
+	for field in node.fields {
 		if field.comments.len > 0 {
 			if f.should_insert_newline_before_node(ast.Expr(field.comments[0]), prev_field) {
 				f.writeln('')
@@ -1947,7 +1945,7 @@ pub fn (mut f Fmt) const_decl(it ast.ConstDecl) {
 			f.comments(field.comments, inline: true)
 			prev_field = ast.Expr(field.comments.last())
 		}
-		if f.should_insert_newline_before_node(field, prev_field) {
+		if node.is_block && f.should_insert_newline_before_node(field, prev_field) {
 			f.writeln('')
 		}
 		name := field.name.after('.')
@@ -1958,9 +1956,9 @@ pub fn (mut f Fmt) const_decl(it ast.ConstDecl) {
 		f.writeln('')
 		prev_field = field
 	}
-	f.comments_after_last_field(it.end_comments)
-	f.indent--
-	if it.is_block {
+	f.comments_after_last_field(node.end_comments)
+	if node.is_block {
+		f.indent--
 		f.writeln(')\n')
 	} else {
 		f.writeln('')

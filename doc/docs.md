@@ -123,7 +123,7 @@ For more details and troubleshooting, please visit the [vab GitHub repository](h
     * [Profiling](#profiling)
 * [Advanced Topics](#advanced-topics)
     * [Memory-unsafe code](#memory-unsafe-code)
-    * [Structs with reference fields](structs-with-reference-fields)
+    * [Structs with reference fields](#structs-with-reference-fields)
     * [sizeof and __offsetof](#sizeof-and-__offsetof)
     * [Calling C from V](#calling-c-from-v)
     * [Debugging generated C code](#debugging-generated-c-code)
@@ -193,7 +193,7 @@ println('hello world')
 ## Running a project folder with several files
 
 Suppose you have a folder with several .v files in it, where one of them
-contains your `main()` function, and the other files have other helper 
+contains your `main()` function, and the other files have other helper
 functions. They may be organized by topic, but still *not yet* structured
 enough to be their own separate reusable modules, and you want to compile
 them all into one program.
@@ -221,7 +221,7 @@ If you want to keep it, use `v -keepc run .` instead, or just compile
 manually with `v .` .
 
 NB: any V compiler flags should be passed *before* the `run` command.
-Everything after the source file/folder, will be passed to the program 
+Everything after the source file/folder, will be passed to the program
 as is - it will not be processed by V.
 
 ## Comments
@@ -1147,12 +1147,12 @@ The `for value in arr` form is used for going through elements of an array.
 If an index is required, an alternative form `for index, value in arr` can be used.
 
 Note, that the value is read-only.
-If you need to modify the array while looping, you have to use indexing:
+If you need to modify the array while looping, you need to declare the element as mutable:
 
 ```v
 mut numbers := [0, 1, 2]
-for i, _ in numbers {
-	numbers[i]++
+for mut num in numbers {
+	num++
 }
 println(numbers) // [1, 2, 3]
 ```
@@ -2525,7 +2525,6 @@ posts_repo := new_repo<Post>(db) // returns Repo<Post>
 user := users_repo.find_by_id(1)? // find_by_id<User>
 post := posts_repo.find_by_id(1)? // find_by_id<Post>
 ```
-At the moment only one type parameter named `T` is supported.
 
 Currently generic function definitions must declare their type parameters, but in
 future V will infer generic type parameters from single-letter type names in
@@ -2977,14 +2976,31 @@ The developer doesn't need to change anything in their code. "It just works", li
 Python, Go, or Java, except there's no heavy GC tracing everything or expensive RC for
 each object.
 
+### Control
+
+You can take advantage of V's autofree engine and define a `free()` method on custom 
+data types:
+
+```v
+struct MyType {}
+
+[unsafe]
+fn (data &MyType) free() {
+	// ...
+}
+```
+
+Just as the compiler frees C data types with C's `free()`, it will statically insert 
+`free()` calls for your data type at the end of each variable's lifetime.
+
 For developers willing to have more low level control, autofree can be disabled with
 `-manualfree`, or by adding a `[manualfree]` on each function that wants manage its
-memory manually.
+memory manually. (See [attributes](#attributes)).
 
-Note: right now autofree is hidden behind the -autofree flag. It will be enabled by
-default in V 0.3. If autofree is not used, V programs will leak memory.
+_Note: right now autofree is hidden behind the -autofree flag. It will be enabled by
+default in V 0.3. If autofree is not used, V programs will leak memory._
 
-For example:
+### Examples
 
 ```v
 import strings
@@ -3007,9 +3023,8 @@ fn draw_scene() {
 The strings don't escape `draw_text`, so they are cleaned up when
 the function exits.
 
-In fact, the first two calls won't result in any allocations at all.
-These two strings are small,
-V will use a preallocated buffer for them.
+In fact, with the `-prealloc` flag, the first two calls won't result in any allocations at all.
+These two strings are small, so V will use a preallocated buffer for them.
 
 ```v
 struct User {
@@ -3517,6 +3532,10 @@ $if test {
 $if debug {
 	println('debugging')
 }
+// v -prod ...
+$if prod {
+	println('production build')
+}
 // v -d option ...
 $if option ? {
 	println('custom option')
@@ -3528,11 +3547,11 @@ Right now it can be used to detect an OS, compiler, platform or compilation opti
 `$if debug` is a special option like `$if windows` or `$if x32`.
 If you're using a custom ifdef, then you do need `$if option ? {}` and compile with`v -d option`.
 Full list of builtin options:
-| OS                            | Compilers         | Platforms             | Other                 |
-| ---                           | ---               | ---                   | ---                   |
-| `windows`, `linux`, `macos`   | `gcc`, `tinyc`    | `amd64`, `aarch64`    | `debug`, `test`, `js` |
-| `mac`, `darwin`, `ios`,       | `clang`, `mingw`  | `x64`, `x32`          | `glibc`, `prealloc`   |
-| `android`,`mach`, `dragonfly` | `msvc`            | `little_endian`       | `no_bounds_checking`  |
+| OS                            | Compilers         | Platforms             | Other                     |
+| ---                           | ---               | ---                   | ---                       |
+| `windows`, `linux`, `macos`   | `gcc`, `tinyc`    | `amd64`, `aarch64`    | `debug`, `prod`, `test`   |
+| `mac`, `darwin`, `ios`,       | `clang`, `mingw`  | `x64`, `x32`          | `js`, `glibc`, `prealloc` |
+| `android`,`mach`, `dragonfly` | `msvc`            | `little_endian`       | `no_bounds_checking`      |
 | `gnu`, `hpux`, `haiku`, `qnx` | `cplusplus`       | `big_endian`          | |
 | `solaris`, `linux_or_macos`   | | | |
 
@@ -4021,6 +4040,10 @@ function/struct/enum declaration and applies only to the following declaration.
 [deprecated]
 fn old_function() {
 }
+
+// It can also display a custom deprecation message
+[deprecated: 'use new_function() instead']
+fn legacy_function() {}
 
 // This function's calls will be inlined.
 [inline]

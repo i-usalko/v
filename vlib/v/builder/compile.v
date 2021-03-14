@@ -15,8 +15,8 @@ fn (mut b Builder) get_vtmp_filename(base_file_name string, postfix string) stri
 	if !b.pref.reuse_tmpc {
 		uniq = '.$rand.u64()'
 	}
-	return os.real_path(os.join_path(vtmp, os.file_name(os.real_path(base_file_name)) +
-		'$uniq$postfix'))
+	fname := os.file_name(os.real_path(base_file_name)) + '$uniq$postfix'
+	return os.real_path(os.join_path(vtmp, fname))
 }
 
 pub fn compile(command string, pref &pref.Preferences) {
@@ -45,7 +45,8 @@ pub fn compile(command string, pref &pref.Preferences) {
 		.x64 { b.compile_x64() }
 	}
 	if pref.is_stats {
-		println('compilation took: ${util.bold(sw.elapsed().milliseconds().str())} ms')
+		compilation_time := util.bold(sw.elapsed().milliseconds().str())
+		println('compilation took: $compilation_time ms')
 	}
 	b.exit_on_invalid_syntax()
 	// running does not require the parsers anymore
@@ -93,12 +94,12 @@ fn (mut b Builder) run_compiled_executable_and_exit() {
 	}
 	if b.pref.os == .ios {
 		device := '"iPhone SE (2nd generation)"'
-		os.exec('xcrun simctl boot $device') or { panic(err) }
+		os.execute_or_panic('xcrun simctl boot $device')
 		bundle_name := b.pref.out_name.split('/').last()
 		display_name := if b.pref.display_name != '' { b.pref.display_name } else { bundle_name }
-		os.exec('xcrun simctl install $device ${display_name}.app') or { panic(err) }
+		os.execute_or_panic('xcrun simctl install $device ${display_name}.app')
 		bundle_id := if b.pref.bundle_id != '' { b.pref.bundle_id } else { 'app.vlang.$bundle_name' }
-		os.exec('xcrun simctl launch $device $bundle_id') or { panic(err) }
+		os.execute_or_panic('xcrun simctl launch $device $bundle_id')
 	} else {
 		exefile := os.real_path(b.pref.out_name)
 		mut cmd := '"$exefile"'

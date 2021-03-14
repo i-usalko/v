@@ -1,8 +1,7 @@
-module main
-
 // Copyright (c) 2019-2021 Alexander Medvednikov. All rights reserved.
 // Use of this source code is governed by an MIT license that can be found in the LICENSE file.
-//
+module main
+
 // This module follows a similar convention to Rust: `init` makes the
 // structure of the program in the _current_ directory, while `new`
 // makes the program structure in a _sub_ directory. Besides that, the
@@ -19,6 +18,23 @@ mut:
 
 fn cerror(e string) {
 	eprintln('\nerror: $e')
+}
+
+fn check_name(name string) string {
+	if name.is_title() {
+		mut cname := name.to_lower()
+		if cname.contains(' ') {
+			cname = cname.replace(' ', '_')
+		}
+		eprintln('warning: the project name cannot be capitalized, the name will be changed to `$cname`')
+		return cname
+	}
+	if name.contains(' ') {
+		cname := name.replace(' ', '_')
+		eprintln('warning: the project name cannot contain spaces, the name will be changed to `$cname`')
+		return cname
+	}
+	return name
 }
 
 fn vmod_content(c Create) string {
@@ -81,7 +97,8 @@ fn (c &Create) write_main(new bool) {
 fn (c &Create) create_git_repo(dir string) {
 	// Create Git Repo and .gitignore file
 	if !os.is_dir('$dir/.git') {
-		os.exec('git init $dir') or {
+		res := os.execute('git init $dir')
+		if res.exit_code != 0 {
 			cerror('Unable to create git repo')
 			exit(4)
 		}
@@ -98,7 +115,7 @@ fn (c &Create) create_git_repo(dir string) {
 
 fn create(args []string) {
 	mut c := Create{}
-	c.name = if args.len > 0 { args[0] } else { os.input('Input your project name: ') }
+	c.name = check_name(if args.len > 0 { args[0] } else { os.input('Input your project name: ') })
 	if c.name == '' {
 		cerror('project name cannot be empty')
 		exit(1)
@@ -135,7 +152,7 @@ fn init_project() {
 		exit(3)
 	}
 	mut c := Create{}
-	c.name = os.file_name(os.getwd())
+	c.name = check_name(os.file_name(os.getwd()))
 	c.description = ''
 	c.write_vmod(false)
 	c.write_main(false)
@@ -144,13 +161,18 @@ fn init_project() {
 }
 
 fn main() {
-	if os.args[1] == 'new' {
-		create(os.args[2..])
-	} else if os.args[1] == 'init' {
-		init_project()
-	} else {
-		cerror('Unknown command: ${os.args[1]}')
-		exit(1)
+	cmd := os.args[1]
+	match cmd {
+		'new' {
+			create(os.args[2..])
+		}
+		'init' {
+			init_project()
+		}
+		else {
+			cerror('unknown command: $cmd')
+			exit(1)
+		}
 	}
 	println('Complete!')
 }
