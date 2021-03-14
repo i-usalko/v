@@ -1592,13 +1592,14 @@ pub fn (s string) repeat(count int) string {
 	for i in 0 .. count {
 		for j in 0 .. s.len {
 			unsafe {
-				bytes[bislen + si] = s[si]
+				ret[i * s.len + j] = s[j]
 			}
 		}
 	}
 	unsafe {
-		bytes[blen] = `0`
-	    return bytes.vstring_with_len(blen)
+		new_len := s.len * count
+		ret[new_len] = 0
+		return ret.vstring_with_len(new_len)
 	}
 }
 
