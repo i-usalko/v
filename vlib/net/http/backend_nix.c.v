@@ -37,6 +37,9 @@ fn (req &Request) ssl_do(port int, method Method, host_name string, path string)
 	res = C.SSL_get_verify_result(voidptr(ssl))
 	// /////
 	req_headers := req.build_request_headers(method, host_name, path)
+	$if trace_http_request ? {
+		eprintln('> $req_headers')
+	}
 	// println(req_headers)
 	C.BIO_puts(web, req_headers.str)
 	mut content := strings.new_builder(100)
@@ -55,7 +58,7 @@ fn (req &Request) ssl_do(port int, method Method, host_name string, path string)
 			eprintln(unsafe { tos(bp, len) })
 			eprintln('-'.repeat(20))
 		}
-		unsafe { content.write_bytes(bp, len) }
+		unsafe { content.write_ptr(bp, len) }
 	}
 	if web != 0 {
 		C.BIO_free_all(web)
@@ -63,5 +66,9 @@ fn (req &Request) ssl_do(port int, method Method, host_name string, path string)
 	if ctx != 0 {
 		C.SSL_CTX_free(ctx)
 	}
-	return parse_response(content.str())
+	response_text := content.str()
+	$if trace_http_response ? {
+		eprintln('< $response_text')
+	}
+	return parse_response(response_text)
 }

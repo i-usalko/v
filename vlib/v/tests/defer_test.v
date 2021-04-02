@@ -59,7 +59,7 @@ fn test_defer_early_exit() {
 
 fn test_defer_option() {
 	mut ok := Num{0}
-	set_num_opt(mut ok) or { }
+	set_num_opt(mut ok) or {}
 	assert ok.val == 1
 }
 
@@ -100,4 +100,20 @@ fn test_defer_with_if() {
 	assert n.val == 10
 	set_num_if(mut n, 20, false)
 	assert n.val == 10
+}
+
+fn test_defer_order() {
+	mut i := 0
+	defer {
+		i++
+		assert i == 3
+	}
+	defer {
+		i++
+		assert i == 2
+	}
+	defer {
+		i++
+		assert i == 1
+	}
 }

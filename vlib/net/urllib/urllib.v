@@ -53,8 +53,9 @@ fn should_escape(c byte, mode EncodingMode) bool {
 		// we could possibly allow, and parse will reject them if we
 		// escape them (because hosts can`t use %-encoding for
 		// ASCII bytes).
-		if
-			c in [`!`, `$`, `&`, `\\`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `:`, `[`, `]`, `<`, `>`, `"`] {
+		if c in [`!`, `$`, `&`, `\\`, `(`, `)`, `*`, `+`, `,`, `;`, `=`, `:`, `[`, `]`, `<`, `>`,
+			`"`,
+		] {
 			return false
 		}
 	}
@@ -158,6 +159,11 @@ fn unescape(s_ string, mode EncodingMode) ?string {
 				}
 				n++
 				if i + 2 >= s.len || !ishex(s[i + 1]) || !ishex(s[i + 2]) {
+					if mode == .encode_query_component && i + 1 < s.len {
+						s = s[..i] + '%25' + s[(i + 1)..]
+						i += 4 // skip the %25 and the next character
+						continue
+					}
 					s = s[i..]
 					if s.len > 3 {
 						s = s[..3]
@@ -745,8 +751,12 @@ pub fn (u URL) str() string {
 			// preceded by a dot-segment (e.g., './this:that') to make a relative-
 			// path reference.
 			i := path.index_byte(`:`)
-			if i > -1 && path[..i].index_byte(`/`) == -1 {
-				buf.write_string('./')
+			if i > -1 {
+				// TODO remove this when autofree handles tmp
+				// expressions like this
+				if i > -1 && path[..i].index_byte(`/`) == -1 {
+					buf.write_string('./')
+				}
 			}
 		}
 		buf.write_string(path)
@@ -785,7 +795,7 @@ pub fn parse_query(query string) ?Values {
 // but any errors will be silent
 fn parse_query_silent(query string) Values {
 	mut m := new_values()
-	parse_query_values(mut m, query) or { }
+	parse_query_values(mut m, query) or {}
 	return m
 }
 

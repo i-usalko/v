@@ -5,7 +5,6 @@ module parser
 
 import v.ast
 import v.vet
-import v.table
 import v.token
 
 pub fn (mut p Parser) expr(precedence int) ast.Expr {
@@ -14,7 +13,7 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 		eprintln('parsing file: ${p.file_name:-30} | tok.kind: ${p.tok.kind:-10} | tok.lit: ${p.tok.lit:-10} | tok_pos: ${tok_pos.str():-45} | expr($precedence)')
 	}
 	// println('\n\nparser.expr()')
-	mut node := ast.Expr{}
+	mut node := ast.empty_expr()
 	is_stmt_ident := p.is_stmt_ident
 	p.is_stmt_ident = false
 	if !p.pref.is_fmt {
@@ -23,14 +22,20 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 	// Prefix
 	match p.tok.kind {
 		.key_mut, .key_shared, .key_atomic, .key_static {
-			node = p.parse_ident(table.Language.v)
+			node = p.parse_ident(ast.Language.v)
 			p.is_stmt_ident = is_stmt_ident
 		}
-		.name {
+		.name, .question {
 			if p.tok.lit == 'sql' && p.peek_tok.kind == .name {
 				p.inside_match = true // reuse the same var for perf instead of inside_sql TODO rename
 				node = p.sql_expr()
 				p.inside_match = false
+			} else if p.tok.lit == 'map' && p.peek_tok.kind == .lcbr && !(p.builtin_mod
+				&& p.file_base == 'map.v') {
+				p.next() // `map`
+				p.next() // `{`
+				node = p.map_init()
+				p.check(.rcbr) // `}`
 			} else {
 				if p.inside_if && p.is_generic_name() {
 					// $if T is string {}
@@ -63,8 +68,7 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 					return p.if_expr(true)
 				}
 				else {
-					p.error_with_pos('unexpected `$`', p.peek_tok.position())
-					return ast.Expr{}
+					return p.error_with_pos('unexpected `$`', p.peek_tok.position())
 				}
 			}
 		}
@@ -129,8 +133,7 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 			mut pos := p.tok.position()
 			p.next()
 			if p.inside_unsafe {
-				p.error_with_pos('already inside `unsafe` block', pos)
-				return ast.Expr{}
+				return p.error_with_pos('already inside `unsafe` block', pos)
 			}
 			p.inside_unsafe = true
 			p.check(.lcbr)
@@ -186,7 +189,9 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 					pos: pos
 				}
 			} else {
-				p.register_used_import(p.tok.lit)
+				if p.tok.kind == .name {
+					p.register_used_import(p.tok.lit)
+				}
 				save_expr_mod := p.expr_mod
 				p.expr_mod = ''
 				sizeof_type := p.parse_type()
@@ -232,8 +237,8 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 			st := p.parse_type()
 			p.check(.comma)
 			if p.tok.kind != .name {
-				p.error_with_pos('unexpected `$p.tok.lit`, expecting struct field', p.tok.position())
-				return ast.Expr{}
+				return p.error_with_pos('unexpected `$p.tok.lit`, expecting struct field',
+					p.tok.position())
 			}
 			field := p.tok.lit
 			p.next()
@@ -273,13 +278,11 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 					node = p.struct_init(true) // short_syntax: true
 				} else if p.tok.kind == .name {
 					p.next()
-					p.error_with_pos('unexpected $p.tok, expecting `:` after struct field name',
+					return p.error_with_pos('unexpected $p.tok, expecting `:` after struct field name',
 						p.tok.position())
-					return ast.Expr{}
 				} else {
-					p.error_with_pos('unexpected $p.tok, expecting struct field name',
+					return p.error_with_pos('unexpected $p.tok, expecting struct field name',
 						p.tok.position())
-					return ast.Expr{}
 				}
 			}
 			p.check(.rcbr)
@@ -288,7 +291,7 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 			if p.expecting_type {
 				// Anonymous function type
 				start_pos := p.tok.position()
-				return ast.Type{
+				return ast.TypeNode{
 					typ: p.parse_type()
 					pos: start_pos.extend(p.prev_tok.position())
 				}
@@ -316,10 +319,9 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 			}
 		}
 		else {
-			if p.tok.kind != .eof {
+			if p.tok.kind != .eof && !(p.tok.kind == .rsbr && p.inside_asm) {
 				// eof should be handled where it happens
-				p.error_with_pos('invalid expression: unexpected $p.tok', p.tok.position())
-				return ast.Expr{}
+				return p.error_with_pos('invalid expression: unexpected $p.tok', p.tok.position())
 			}
 		}
 	}
@@ -354,13 +356,17 @@ pub fn (mut p Parser) expr_with_left(left ast.Expr, precedence int, is_stmt_iden
 			}
 		} else if p.tok.kind == .key_as {
 			// sum type as cast `x := SumType as Variant`
-			pos := p.tok.position()
-			p.next()
-			typ := p.parse_type()
-			node = ast.AsCast{
-				expr: node
-				typ: typ
-				pos: pos
+			if !p.inside_asm {
+				pos := p.tok.position()
+				p.next()
+				typ := p.parse_type()
+				node = ast.AsCast{
+					expr: node
+					typ: typ
+					pos: pos
+				}
+			} else {
+				return node
 			}
 		} else if p.tok.kind == .left_shift && p.is_stmt_ident {
 			// arr << elem
@@ -432,7 +438,7 @@ fn (mut p Parser) infix_expr(left ast.Expr) ast.Expr {
 	precedence := p.tok.precedence()
 	mut pos := p.tok.position()
 	p.next()
-	mut right := ast.Expr{}
+	mut right := ast.empty_expr()
 	prev_expecting_type := p.expecting_type
 	if op in [.key_is, .not_is] {
 		p.expecting_type = true
@@ -453,7 +459,7 @@ fn (mut p Parser) infix_expr(left ast.Expr) ast.Expr {
 			p.open_scope()
 			p.scope.register(ast.Var{
 				name: 'err'
-				typ: table.error_type
+				typ: ast.error_type
 				pos: p.tok.position()
 				is_used: true
 			})
@@ -516,7 +522,7 @@ fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 			p.open_scope()
 			p.scope.register(ast.Var{
 				name: 'err'
-				typ: table.error_type
+				typ: ast.error_type
 				pos: p.tok.position()
 				is_used: true
 			})

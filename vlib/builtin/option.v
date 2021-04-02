@@ -5,7 +5,7 @@ module builtin
 
 // IError holds information about an error instance
 pub interface IError {
-	msg  string
+	msg string
 	code int
 }
 
@@ -16,9 +16,12 @@ pub:
 	code int
 }
 
-struct Option3 {
-	state byte
-	err   IError = none__
+pub fn (err IError) str() string {
+	return match err {
+		None__ { 'none' }
+		Error { err.msg }
+		else { '$err.type_name(): $err.msg' }
+	}
 }
 
 const none__ = IError(&None__{})
@@ -28,28 +31,8 @@ struct None__ {
 	code int
 }
 
-fn (_ None__) str() string { return 'none' }
-
-fn opt_ok3(data voidptr, mut option Option3, size int) {
-	unsafe {
-		*option = Option3{}
-		// use err to get the end of Option3 and then memcpy into it
-		C.memcpy(byteptr(&option.err) + sizeof(IError), data, size)
-	}
-}
-
-[inline]
-pub fn error3(message string) IError {
-	return &Error{
-		msg: message
-	}
-}
-
-pub fn error_with_code3(message string, code int) IError {
-	return &Error {
-		msg: message
-		code: code
-	}
+fn (_ None__) str() string {
+	return 'none'
 }
 
 // error returns a default error instance containing the error given in `message`.
@@ -65,7 +48,7 @@ pub fn error(message string) IError {
 // `if ouch { return error_with_code('an error occurred', 1) }`
 [inline]
 pub fn error_with_code(message string, code int) IError {
-	return &Error {
+	return &Error{
 		msg: message
 		code: code
 	}
@@ -85,5 +68,29 @@ fn opt_ok(data voidptr, mut option Option, size int) {
 		*option = Option{}
 		// use err to get the end of OptionBase and then memcpy into it
 		C.memcpy(byteptr(&option.err) + sizeof(IError), data, size)
+	}
+}
+
+[unsafe]
+pub fn (e &Error) free() {
+	unsafe { e.msg.free() }
+}
+
+[unsafe]
+pub fn (n &None__) free() {
+	unsafe { n.msg.free() }
+}
+
+[typedef]
+struct C.IError {
+	_object voidptr
+}
+
+[unsafe]
+pub fn (ie &IError) free() {
+	unsafe {
+		ie.msg.free()
+		cie := &C.IError(ie)
+		free(cie._object)
 	}
 }

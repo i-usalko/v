@@ -12,7 +12,6 @@ import v.pref
 import v.fmt
 import v.util
 import v.parser
-import v.table
 import vhelp
 
 struct FormatOptions {
@@ -77,22 +76,9 @@ fn main() {
 		eprintln('vfmt env_vflags_and_os_args: ' + args.str())
 		eprintln('vfmt possible_files: ' + possible_files.str())
 	}
-	mut files := []string{}
-	for file in possible_files {
-		if os.is_dir(file) {
-			files << os.walk_ext(file, '.v')
-			files << os.walk_ext(file, '.vsh')
-			continue
-		}
-		if !file.ends_with('.v') && !file.ends_with('.vv') && !file.ends_with('.vsh') {
-			verror('v fmt can only be used on .v files.\nOffending file: "$file"')
-			continue
-		}
-		if !os.exists(file) {
-			verror('"$file" does not exist')
-			continue
-		}
-		files << file
+	files := util.find_all_v_files(possible_files) or {
+		verror(err.msg)
+		return
 	}
 	if is_atty(0) == 0 && files.len == 0 {
 		foptions.format_pipe()
@@ -169,7 +155,7 @@ fn (foptions &FormatOptions) format_file(file string) {
 	if foptions.is_verbose {
 		eprintln('vfmt2 running fmt.fmt over file: $file')
 	}
-	table := table.new_table()
+	table := ast.new_table()
 	// checker := checker.new_checker(table, prefs)
 	file_ast := parser.parse_file(file, table, .parse_comments, prefs, &ast.Scope{
 		parent: 0
@@ -193,7 +179,7 @@ fn (foptions &FormatOptions) format_pipe() {
 		eprintln('vfmt2 running fmt.fmt over stdin')
 	}
 	input_text := os.get_raw_lines_joined()
-	table := table.new_table()
+	table := ast.new_table()
 	// checker := checker.new_checker(table, prefs)
 	file_ast := parser.parse_text(input_text, '', table, .parse_comments, prefs, &ast.Scope{
 		parent: 0

@@ -12,7 +12,7 @@ pub fn (mut g Gen) gen_c_main() {
 	}
 	g.out.writeln('')
 	main_fn_start_pos := g.out.len
-	if g.pref.os == .android && g.pref.is_apk {
+	if (g.pref.os == .android && g.pref.is_apk) || g.pref.os == .ios {
 		g.gen_c_android_sokol_main()
 	} else {
 		g.gen_c_main_header()
@@ -67,6 +67,17 @@ fn (mut g Gen) gen_c_main_function_header() {
 
 fn (mut g Gen) gen_c_main_header() {
 	g.gen_c_main_function_header()
+	if g.pref.gc_mode in [.boehm_full, .boehm_incr, .boehm, .boehm_leak] {
+		g.writeln('#if defined(_VGCBOEHM)')
+		if g.pref.gc_mode == .boehm_leak {
+			g.writeln('\tGC_set_find_leak(1);')
+		}
+		g.writeln('\tGC_INIT();')
+		if g.pref.gc_mode == .boehm_incr {
+			g.writeln('\tGC_enable_incremental();')
+		}
+		g.writeln('#endif')
+	}
 	g.writeln('\t_vinit(___argc, (voidptr)___argv);')
 	if g.pref.is_prof {
 		g.writeln('')
@@ -150,6 +161,17 @@ pub fn (mut g Gen) gen_c_main_for_tests() {
 	main_fn_start_pos := g.out.len
 	g.writeln('')
 	g.gen_c_main_function_header()
+	if g.pref.gc_mode in [.boehm_full, .boehm_incr, .boehm, .boehm_leak] {
+		g.writeln('#if defined(_VGCBOEHM)')
+		if g.pref.gc_mode == .boehm_leak {
+			g.writeln('\tGC_set_find_leak(1);')
+		}
+		g.writeln('\tGC_INIT();')
+		if g.pref.gc_mode == .boehm_incr {
+			g.writeln('\tGC_enable_incremental();')
+		}
+		g.writeln('#endif')
+	}
 	g.writeln('\t_vinit(___argc, (voidptr)___argv);')
 	all_tfuncs := g.get_all_test_function_names()
 	if g.pref.is_stats {

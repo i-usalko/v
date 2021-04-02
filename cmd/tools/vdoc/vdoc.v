@@ -11,6 +11,7 @@ import v.doc
 import v.pref
 import v.vmod
 import json
+import term
 
 const (
 	allowed_formats = ['md', 'markdown', 'json', 'text', 'stdout', 'html', 'htm']
@@ -44,6 +45,7 @@ struct Config {
 mut:
 	pub_only         bool = true
 	show_loc         bool // for plaintext
+	is_color         bool
 	is_multi         bool
 	is_vlib          bool
 	is_verbose       bool
@@ -55,6 +57,7 @@ mut:
 	output_type      OutputType = .unset
 	input_path       string
 	symbol_name      string
+	platform         doc.Platform
 }
 
 //
@@ -86,7 +89,12 @@ fn (vd VDoc) gen_json(d doc.Doc) string {
 fn (vd VDoc) gen_plaintext(d doc.Doc) string {
 	cfg := vd.cfg
 	mut pw := strings.new_builder(200)
-	pw.writeln('$d.head.content\n')
+	if cfg.is_color {
+		content_arr := d.head.content.split(' ')
+		pw.writeln('${term.bright_blue(content_arr[0])} ${term.green(content_arr[1])}\n')
+	} else {
+		pw.writeln('$d.head.content\n')
+	}
 	comments := if cfg.include_examples {
 		d.head.merge_comments()
 	} else {
@@ -103,7 +111,11 @@ fn (vd VDoc) write_plaintext_content(contents []doc.DocNode, mut pw strings.Buil
 	cfg := vd.cfg
 	for cn in contents {
 		if cn.content.len > 0 {
-			pw.writeln(cn.content)
+			if cfg.is_color {
+				pw.writeln(color_highlight(cn.content, vd.docs[0].table))
+			} else {
+				pw.writeln(cn.content)
+			}
 			if cn.comments.len > 0 && !cfg.pub_only {
 				comments := if cfg.include_examples {
 					cn.merge_comments()
@@ -113,7 +125,7 @@ fn (vd VDoc) write_plaintext_content(contents []doc.DocNode, mut pw strings.Buil
 				pw.writeln(comments.trim_space().split_into_lines().map('    ' + it).join('\n'))
 			}
 			if cfg.show_loc {
-				pw.writeln('Location: $cn.file_path:$cn.pos.line\n')
+				pw.writeln('Location: $cn.file_path:${cn.pos.line_nr + 1}\n')
 			}
 		}
 		vd.write_plaintext_content(cn.children, mut pw)
@@ -281,7 +293,7 @@ fn (mut vd VDoc) generate_docs_from_file() {
 	}
 	for dirpath in dirs {
 		vd.vprintln('Generating $out.typ docs for "$dirpath"')
-		mut dcs := doc.generate(dirpath, cfg.pub_only, true, cfg.symbol_name) or {
+		mut dcs := doc.generate(dirpath, cfg.pub_only, true, cfg.platform, cfg.symbol_name) or {
 			vd.emit_generate_err(err)
 			exit(1)
 		}
@@ -319,7 +331,8 @@ fn (mut vd VDoc) generate_docs_from_file() {
 		}
 		outputs := vd.render(out)
 		if outputs.len == 0 {
-			println('No documentation for $dirs')
+			eprintln('vdoc: No documentation found for ${dirs[0]}')
+			exit(1)
 		} else {
 			first := outputs.keys()[0]
 			println(outputs[first])
@@ -369,6 +382,7 @@ fn (vd VDoc) vprintln(str string) {
 
 fn parse_arguments(args []string) Config {
 	mut cfg := Config{}
+	cfg.is_color = term.can_show_color_on_stdout()
 	for i := 0; i < args.len; i++ {
 		arg := args[i]
 		current_args := args[i..]
@@ -386,6 +400,12 @@ fn parse_arguments(args []string) Config {
 				cfg.output_type = set_output_type_from_str(format)
 				i++
 			}
+			'-color' {
+				cfg.is_color = true
+			}
+			'-no-color' {
+				cfg.is_color = false
+			}
 			'-inline-assets' {
 				cfg.inline_assets = true
 			}
@@ -398,6 +418,19 @@ fn parse_arguments(args []string) Config {
 			'-o' {
 				opath := cmdline.option(current_args, '-o', '')
 				cfg.output_path = if opath == 'stdout' { opath } else { os.real_path(opath) }
+				i++
+			}
+			'-os' {
+				platform_str := cmdline.option(current_args, '-os', '')
+				if platform_str == 'cross' {
+					eprintln('`v doc -os cross` is not supported yet.')
+					exit(1)
+				}
+				selected_platform := doc.platform_from_string(platform_str) or {
+					eprintln(err.msg)
+					exit(1)
+				}
+				cfg.platform = selected_platform
 				i++
 			}
 			'-no-timestamp' {

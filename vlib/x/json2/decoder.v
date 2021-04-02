@@ -4,7 +4,8 @@
 module json2
 
 // `Any` is a sum type that lists the possible types to be decoded and used.
-pub type Any = Null | []Any | bool | f32 | f64 | i64 | int | map[string]Any | string
+pub type Any = Null | []Any | bool | f32 | f64 | i64 | int | map[string]Any | string |
+	u64
 
 // `Null` struct is a simple representation of the `null` value in JSON.
 pub struct Null {
@@ -19,6 +20,16 @@ mut:
 	n_tok        Token
 	n_level      int
 	convert_type bool = true
+}
+
+struct InvalidTokenError {
+	msg  string
+	code int
+}
+
+struct UnknownTokenError {
+	msg  string
+	code int
 }
 
 fn (mut p Parser) next() {
@@ -73,7 +84,9 @@ fn (mut p Parser) decode() ?Any {
 	p.next_with_err() ?
 	fi := p.decode_value() ?
 	if p.tok.kind != .eof {
-		return error(p.emit_error('invalid token `$p.tok.kind`'))
+		return IError(&InvalidTokenError{
+			msg: p.emit_error('invalid token `$p.tok.kind`')
+		})
 	}
 	return fi
 }
@@ -98,18 +111,27 @@ fn (mut p Parser) decode_value() ?Any {
 			kind := p.tok.kind
 			p.next_with_err() ?
 			if p.convert_type {
-				return if kind == .float { Any(tl.f64()) } else { Any(tl.i64()) }
+				if kind == .float {
+					return Any(tl.f64())
+				}
+				return Any(tl.i64())
 			}
 			return Any(tl)
 		}
 		.bool_ {
 			lit := p.tok.lit.bytestr()
 			p.next_with_err() ?
-			return if p.convert_type { Any(lit.bool()) } else { Any(lit) }
+			if p.convert_type {
+				return Any(lit.bool())
+			}
+			return Any(lit)
 		}
 		.null {
 			p.next_with_err() ?
-			return if p.convert_type { Any(null) } else { Any('null') }
+			if p.convert_type {
+				return Any(null)
+			}
+			return Any('null')
 		}
 		.str_ {
 			str := p.tok.lit.bytestr()
@@ -117,7 +139,9 @@ fn (mut p Parser) decode_value() ?Any {
 			return Any(str)
 		}
 		else {
-			return error(p.emit_error('invalid token `$p.tok.kind`'))
+			return IError(&InvalidTokenError{
+				msg: p.emit_error('invalid token `$p.tok.kind`')
+			})
 		}
 	}
 	return Any{}
@@ -132,12 +156,16 @@ fn (mut p Parser) decode_array() ?Any {
 		if p.tok.kind == .comma {
 			p.next_with_err() ?
 			if p.tok.kind == .rsbr || p.tok.kind == .rcbr {
-				return error(p.emit_error('invalid token `$p.tok.lit'))
+				return IError(&InvalidTokenError{
+					msg: p.emit_error('invalid token `$p.tok.lit')
+				})
 			}
 		} else if p.tok.kind == .rsbr {
 			break
 		} else {
-			return error(p.emit_error("unknown token '$p.tok.lit' when decoding array."))
+			return IError(&UnknownTokenError{
+				msg: p.emit_error("unknown token '$p.tok.lit' when decoding array.")
+			})
 		}
 	}
 	p.next_with_err() ?
@@ -150,7 +178,9 @@ fn (mut p Parser) decode_object() ?Any {
 	for p.tok.kind != .rcbr {
 		is_key := p.tok.kind == .str_ && p.n_tok.kind == .colon
 		if !is_key {
-			return error(p.emit_error('invalid token `$p.tok.kind`, expecting `str_`'))
+			return IError(&InvalidTokenError{
+				msg: p.emit_error('invalid token `$p.tok.kind`, expecting `str_`')
+			})
 		}
 		cur_key := p.tok.lit.bytestr()
 		p.next_with_err() ?
@@ -159,7 +189,9 @@ fn (mut p Parser) decode_object() ?Any {
 		if p.tok.kind == .comma {
 			p.next_with_err() ?
 			if p.tok.kind != .str_ {
-				return error(p.emit_error("unknown token '$p.tok.lit' when decoding object."))
+				return IError(&UnknownTokenError{
+					msg: p.emit_error("unknown token '$p.tok.lit' when decoding object.")
+				})
 			}
 		}
 	}

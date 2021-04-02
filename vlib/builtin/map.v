@@ -95,7 +95,6 @@ fn fast_string_eq(a string, b string) bool {
 struct DenseArray {
 	key_bytes   int
 	value_bytes int
-	slot_bytes  int // sum of 2 fields above
 mut:
 	cap     int
 	len     int
@@ -103,34 +102,34 @@ mut:
 	// array allocated (with `cap` bytes) on first deletion
 	// has non-zero element when key deleted
 	all_deleted &byte
-	data        byteptr // array of interleaved key data and value data
+	values      byteptr
+	keys        byteptr
 }
 
 [inline]
 fn new_dense_array(key_bytes int, value_bytes int) DenseArray {
-	slot_bytes := key_bytes + value_bytes
 	cap := 8
 	return DenseArray{
 		key_bytes: key_bytes
 		value_bytes: value_bytes
-		slot_bytes: slot_bytes
 		cap: cap
 		len: 0
 		deletes: 0
 		all_deleted: 0
-		data: unsafe { malloc(cap * slot_bytes) }
+		keys: unsafe { malloc(cap * key_bytes) }
+		values: unsafe { malloc(cap * value_bytes) }
 	}
 }
 
 [inline]
 fn (d &DenseArray) key(i int) voidptr {
-	return unsafe { d.data + i * d.slot_bytes }
+	return unsafe { d.keys + i * d.key_bytes }
 }
 
 // for cgen
 [inline]
 fn (d &DenseArray) value(i int) voidptr {
-	return unsafe { d.data + i * d.slot_bytes + d.key_bytes }
+	return unsafe { d.values + i * d.value_bytes }
 }
 
 [inline]
@@ -142,12 +141,16 @@ fn (d &DenseArray) has_index(i int) bool {
 // The growth-factor is roughly 1.125 `(x + (x >> 3))`
 [inline]
 fn (mut d DenseArray) expand() int {
+	old_cap := d.cap
+	old_value_size := d.value_bytes * old_cap
+	old_key_size := d.key_bytes * old_cap
 	if d.cap == d.len {
 		d.cap += d.cap >> 3
 		unsafe {
-			d.data = v_realloc(d.data, d.slot_bytes * d.cap)
+			d.keys = realloc_data(d.keys, old_key_size, d.key_bytes * d.cap)
+			d.values = realloc_data(d.values, old_value_size, d.value_bytes * d.cap)
 			if d.deletes != 0 {
-				d.all_deleted = v_realloc(d.all_deleted, d.cap)
+				d.all_deleted = realloc_data(d.all_deleted, old_cap, d.cap)
 				C.memset(d.all_deleted + d.len, 0, d.cap - d.len)
 			}
 		}
@@ -165,29 +168,38 @@ fn (mut d DenseArray) expand() int {
 // Move all zeros to the end of the array and resize array
 fn (mut d DenseArray) zeros_to_end() {
 	// TODO alloca?
-	mut tmp_buf := unsafe { malloc(d.slot_bytes) }
+	mut tmp_value := unsafe { malloc(d.value_bytes) }
+	mut tmp_key := unsafe { malloc(d.key_bytes) }
 	mut count := 0
 	for i in 0 .. d.len {
 		if d.has_index(i) {
 			// swap (TODO: optimize)
 			unsafe {
-				C.memcpy(tmp_buf, d.key(count), d.slot_bytes)
-				C.memcpy(d.key(count), d.key(i), d.slot_bytes)
-				C.memcpy(d.key(i), tmp_buf, d.slot_bytes)
+				// Swap keys
+				C.memcpy(tmp_key, d.key(count), d.key_bytes)
+				C.memcpy(d.key(count), d.key(i), d.key_bytes)
+				C.memcpy(d.key(i), tmp_key, d.key_bytes)
+				// Swap values
+				C.memcpy(tmp_value, d.value(count), d.value_bytes)
+				C.memcpy(d.value(count), d.value(i), d.value_bytes)
+				C.memcpy(d.value(i), tmp_value, d.value_bytes)
 			}
 			count++
 		}
 	}
 	unsafe {
-		free(tmp_buf)
+		free(tmp_value)
+		free(tmp_key)
 		d.deletes = 0
 		// TODO: reallocate instead as more deletes are likely
 		free(d.all_deleted)
 	}
 	d.len = count
+	old_cap := d.cap
 	d.cap = if count < 8 { 8 } else { count }
 	unsafe {
-		d.data = v_realloc(d.data, d.slot_bytes * d.cap)
+		d.values = realloc_data(d.values, d.value_bytes * old_cap, d.value_bytes * d.cap)
+		d.keys = realloc_data(d.keys, d.key_bytes * old_cap, d.key_bytes * d.cap)
 	}
 }
 
@@ -406,10 +418,12 @@ fn (mut m map) meta_greater(_index u32, _metas u32, kvi u32) {
 [inline]
 fn (mut m map) ensure_extra_metas(probe_count u32) {
 	if (probe_count << 1) == m.extra_metas {
+		size_of_u32 := sizeof(u32)
+		old_mem_size := (m.even_index + 2 + m.extra_metas)
 		m.extra_metas += extra_metas_inc
 		mem_size := (m.even_index + 2 + m.extra_metas)
 		unsafe {
-			x := v_realloc(byteptr(m.metas), int(sizeof(u32) * mem_size))
+			x := realloc_data(byteptr(m.metas), int(size_of_u32 * old_mem_size), int(size_of_u32 * mem_size))
 			m.metas = &u32(x)
 			C.memset(m.metas + mem_size - extra_metas_inc, 0, int(sizeof(u32) * extra_metas_inc))
 		}
@@ -436,7 +450,7 @@ fn (mut m map) set_1(key voidptr, value voidptr) {
 		pkey := unsafe { m.key_values.key(kv_index) }
 		if m.key_eq_fn(key, pkey) {
 			unsafe {
-				pval := byteptr(pkey) + m.key_bytes
+				pval := m.key_values.value(kv_index)
 				C.memcpy(pval, value, m.value_bytes)
 			}
 			return
@@ -447,8 +461,9 @@ fn (mut m map) set_1(key voidptr, value voidptr) {
 	kv_index := m.key_values.expand()
 	unsafe {
 		pkey := m.key_values.key(kv_index)
+		pvalue := m.key_values.value(kv_index)
 		m.clone_fn(pkey, key)
-		C.memcpy(byteptr(pkey) + m.key_bytes, value, m.value_bytes)
+		C.memcpy(byteptr(pvalue), value, m.value_bytes)
 	}
 	m.meta_greater(index, meta, u32(kv_index))
 	m.len++
@@ -477,6 +492,7 @@ fn (mut m map) expand() {
 fn (mut m map) rehash() {
 	meta_bytes := sizeof(u32) * (m.even_index + 2 + m.extra_metas)
 	unsafe {
+		// TODO: use realloc_data here too
 		x := v_realloc(byteptr(m.metas), int(meta_bytes))
 		m.metas = &u32(x)
 		C.memset(m.metas, 0, meta_bytes)
@@ -526,7 +542,8 @@ fn (mut m map) get_and_set_1(key voidptr, zero voidptr) voidptr {
 				kv_index := int(unsafe { m.metas[index + 1] })
 				pkey := unsafe { m.key_values.key(kv_index) }
 				if m.key_eq_fn(key, pkey) {
-					return unsafe { byteptr(pkey) + m.key_values.key_bytes }
+					pval := unsafe { m.key_values.value(kv_index) }
+					return unsafe { byteptr(pval) }
 				}
 			}
 			index += 2
@@ -552,7 +569,8 @@ fn (m &map) get_1(key voidptr, zero voidptr) voidptr {
 			kv_index := int(unsafe { m.metas[index + 1] })
 			pkey := unsafe { m.key_values.key(kv_index) }
 			if m.key_eq_fn(key, pkey) {
-				return unsafe { byteptr(pkey) + m.key_values.key_bytes }
+				pval := unsafe { m.key_values.value(kv_index) }
+				return unsafe { byteptr(pval) }
 			}
 		}
 		index += 2
@@ -575,7 +593,8 @@ fn (m &map) get_1_check(key voidptr) voidptr {
 			kv_index := int(unsafe { m.metas[index + 1] })
 			pkey := unsafe { m.key_values.key(kv_index) }
 			if m.key_eq_fn(key, pkey) {
-				return unsafe { byteptr(pkey) + m.key_values.key_bytes }
+				pval := unsafe { m.key_values.value(kv_index) }
+				return unsafe { byteptr(pval) }
 			}
 		}
 		index += 2
@@ -716,18 +735,19 @@ fn (d &DenseArray) clone() DenseArray {
 	res := DenseArray{
 		key_bytes: d.key_bytes
 		value_bytes: d.value_bytes
-		slot_bytes: d.slot_bytes
 		cap: d.cap
 		len: d.len
 		deletes: d.deletes
 		all_deleted: 0
-		data: 0
+		values: 0
+		keys: 0
 	}
 	unsafe {
 		if d.deletes != 0 {
 			res.all_deleted = memdup(d.all_deleted, d.cap)
 		}
-		res.data = memdup(d.data, d.cap * d.slot_bytes)
+		res.keys = memdup(d.keys, d.cap * d.key_bytes)
+		res.values = memdup(d.values, d.cap * d.value_bytes)
 	}
 	return res
 }
@@ -789,5 +809,8 @@ pub fn (m &map) free() {
 		}
 		unsafe { free(m.key_values.all_deleted) }
 	}
-	unsafe { free(m.key_values.data) }
+	unsafe {
+		free(m.key_values.keys)
+		free(m.key_values.values)
+	}
 }

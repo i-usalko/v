@@ -17,12 +17,12 @@ pub fn (mut b Builder) gen_c(v_files []string) string {
 	if b.pref.only_check_syntax {
 		return ''
 	}
-	//
+
 	util.timing_start('CHECK')
-	b.generic_struct_insts_to_concrete()
+	b.table.generic_struct_insts_to_concrete()
 	b.checker.check_files(b.parsed_files)
 	util.timing_measure('CHECK')
-	//
+
 	if b.pref.skip_unused {
 		markused.mark_used(mut b.table, b.pref, b.parsed_files)
 	}
@@ -84,13 +84,5 @@ pub fn (mut b Builder) compile_c() {
 		out_name_c = b.get_vtmp_filename(b.pref.out_name, '.tmp.so.c')
 	}
 	b.build_c(files, out_name_c)
-	if b.pref.os == .ios {
-		bundle_name := b.pref.out_name.split('/').last()
-		bundle_id := if b.pref.bundle_id != '' { b.pref.bundle_id } else { 'app.vlang.$bundle_name' }
-		display_name := if b.pref.display_name != '' { b.pref.display_name } else { bundle_name }
-		os.mkdir('${display_name}.app') or { panic(err) }
-		os.write_file('${display_name}.app/Info.plist', make_ios_plist(display_name, bundle_id,
-			bundle_name, 1)) or { panic(err) }
-	}
 	b.cc()
 }

@@ -69,6 +69,16 @@ pub:
 	data         string
 }
 
+struct UnexpectedExtraAttributeError {
+	msg  string
+	code int
+}
+
+struct MultiplePathAttributesError {
+	msg  string = 'Expected at most one path attribute'
+	code int
+}
+
 // declaring init_once in your App struct is optional
 pub fn (ctx Context) init_once() {}
 
@@ -298,6 +308,7 @@ pub fn run_app<T>(mut app T, port int) {
 	}
 }
 
+[manualfree]
 fn handle_conn<T>(mut conn net.TcpConn, mut app T) {
 	conn.set_read_timeout(30 * time.second)
 	conn.set_write_timeout(30 * time.second)
@@ -305,6 +316,9 @@ fn handle_conn<T>(mut conn net.TcpConn, mut app T) {
 		conn.close() or {}
 	}
 	mut reader := io.new_buffered_reader(reader: io.make_reader(conn))
+	defer {
+		reader.free()
+	}
 	page_gen_start := time.ticks()
 	req := parse_request(mut reader) or {
 		eprintln('error parsing request: $err')
@@ -463,7 +477,7 @@ fn parse_attrs(name string, attrs []string) ?([]http.Method, string) {
 		}
 		if attr.starts_with('/') {
 			if path != '' {
-				return error('Expected at most one path attribute')
+				return IError(&MultiplePathAttributesError{})
 			}
 			path = attr
 			x.delete(i)
@@ -472,7 +486,9 @@ fn parse_attrs(name string, attrs []string) ?([]http.Method, string) {
 		i++
 	}
 	if x.len > 0 {
-		return error('Encountered unexpected extra attributes: $x')
+		return IError(&UnexpectedExtraAttributeError{
+			msg: 'Encountered unexpected extra attributes: $x'
+		})
 	}
 	if methods.len == 0 {
 		methods = [http.Method.get]

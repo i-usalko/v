@@ -5,7 +5,7 @@ import net.urllib
 import strings
 import markdown
 import v.scanner
-import v.table
+import v.ast
 import v.token
 import v.doc
 import v.pref
@@ -89,6 +89,9 @@ enum HighlightTokenTyp {
 	punctuation
 	string
 	symbol
+	none_
+	module_
+	prefix
 }
 
 struct SearchModuleResult {
@@ -219,13 +222,14 @@ fn (vd VDoc) write_content(cn &doc.DocNode, d &doc.Doc, mut hw strings.Builder) 
 	} else {
 		os.file_name(cn.file_path)
 	}
-	src_link := get_src_link(vd.manifest.repo_url, file_path_name, cn.pos.line)
+	src_link := get_src_link(vd.manifest.repo_url, file_path_name, cn.pos.line_nr + 1)
 	if cn.content.len != 0 || (cn.name == 'Constants') {
 		hw.write_string(doc_node_html(cn, src_link, false, cfg.include_examples, d.table))
 	}
 	for child in cn.children {
 		child_file_path_name := child.file_path.replace('$base_dir/', '')
-		child_src_link := get_src_link(vd.manifest.repo_url, child_file_path_name, child.pos.line)
+		child_src_link := get_src_link(vd.manifest.repo_url, child_file_path_name, 
+			child.pos.line_nr + 1)
 		hw.write_string(doc_node_html(child, child_src_link, false, cfg.include_examples,
 			d.table))
 	}
@@ -340,7 +344,7 @@ fn get_src_link(repo_url string, file_name string, line_nr int) string {
 	return url.str()
 }
 
-fn html_highlight(code string, tb &table.Table) string {
+fn html_highlight(code string, tb &ast.Table) string {
 	builtin := ['bool', 'string', 'i8', 'i16', 'int', 'i64', 'i128', 'byte', 'u16', 'u32', 'u64',
 		'u128', 'rune', 'f32', 'f64', 'int_literal', 'float_literal', 'byteptr', 'voidptr', 'any']
 	highlight_code := fn (tok token.Token, typ HighlightTokenTyp) string {
@@ -353,7 +357,10 @@ fn html_highlight(code string, tb &table.Table) string {
 		} else {
 			tok.lit
 		}
-		return if typ in [.unone, .name] { lit } else { '<span class="token $typ">$lit</span>' }
+		if typ in [.unone, .name] {
+			return lit
+		}
+		return '<span class="token $typ">$lit</span>'
 	}
 	mut s := scanner.new_scanner(code, .parse_comments, &pref.Preferences{})
 	mut tok := s.scan()
@@ -418,7 +425,7 @@ fn html_highlight(code string, tb &table.Table) string {
 	return buf.str()
 }
 
-fn doc_node_html(dn doc.DocNode, link string, head bool, include_examples bool, tb &table.Table) string {
+fn doc_node_html(dn doc.DocNode, link string, head bool, include_examples bool, tb &ast.Table) string {
 	mut dnw := strings.new_builder(200)
 	head_tag := if head { 'h1' } else { 'h2' }
 	comments := dn.merge_comments_without_examples()

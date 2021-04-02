@@ -138,7 +138,7 @@ fn (mut v Builder) rebuild_cached_module(vexe string, imp_path string) string {
 		vcache.dlog('| Builder.' + @FN, 'vexe: $vexe | imp_path: $imp_path | rebuild_cmd: $rebuild_cmd')
 		os.system(rebuild_cmd)
 		rebuilded_o := v.pref.cache_manager.exists('.o', imp_path) or {
-			panic('could not rebuild cache module for $imp_path, error: $err')
+			panic('could not rebuild cache module for $imp_path, error: $err.msg')
 		}
 		os.chdir(pwd)
 		return rebuilded_o
@@ -196,9 +196,11 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	ccoptions.args = [v.pref.cflags, '-std=gnu99']
 	ccoptions.wargs = ['-Wall', '-Wextra', '-Wno-unused', '-Wno-missing-braces', '-Walloc-zero',
 		'-Wcast-qual', '-Wdate-time', '-Wduplicated-branches', '-Wduplicated-cond', '-Wformat=2',
-		'-Winit-self', '-Winvalid-pch', '-Wjump-misses-init', '-Wlogical-op', '-Wmultichar', '-Wnested-externs',
-		'-Wnull-dereference', '-Wpacked', '-Wpointer-arith', '-Wshadow', '-Wswitch-default', '-Wswitch-enum',
-		'-Wno-unused-parameter', '-Wno-unknown-warning-option', '-Wno-format-nonliteral']
+		'-Winit-self', '-Winvalid-pch', '-Wjump-misses-init', '-Wlogical-op', '-Wmultichar',
+		'-Wnested-externs', '-Wnull-dereference', '-Wpacked', '-Wpointer-arith', '-Wshadow',
+		'-Wswitch-default', '-Wswitch-enum', '-Wno-unused-parameter', '-Wno-unknown-warning-option',
+		'-Wno-format-nonliteral',
+	]
 	if v.pref.os == .ios {
 		ccoptions.args << '-framework Foundation'
 		ccoptions.args << '-framework UIKit'
@@ -381,7 +383,9 @@ fn (mut v Builder) setup_ccompiler_options(ccompiler string) {
 	}
 	v.ccoptions = ccoptions
 	// setup the cache too, so that different compilers/options do not interfere:
-	v.pref.cache_manager.set_temporary_options(ccoptions.thirdparty_object_args([ccoptions.guessed_compiler]))
+	v.pref.cache_manager.set_temporary_options(ccoptions.thirdparty_object_args([
+		ccoptions.guessed_compiler,
+	]))
 }
 
 fn (ccoptions CcompilerOptions) all_args() []string {
@@ -426,18 +430,13 @@ fn (mut v Builder) setup_output_name() {
 		v.pref.cache_manager.save('.description.txt', v.pref.path, '${v.pref.path:-30} @ $v.pref.cache_manager.vopts\n') or {
 			panic(err)
 		}
-		// println('v.table.imports:')
-		// println(v.table.imports)
+		// println('v.ast.imports:')
+		// println(v.ast.imports)
 	}
 	if os.is_dir(v.pref.out_name) {
 		verror("'$v.pref.out_name' is a directory")
 	}
-	if v.pref.os == .ios {
-		bundle_name := v.pref.out_name.split('/').last()
-		v.ccoptions.o_args << '-o "${v.pref.out_name}.app/$bundle_name"'
-	} else {
-		v.ccoptions.o_args << '-o "$v.pref.out_name"'
-	}
+	v.ccoptions.o_args << '-o "$v.pref.out_name"'
 }
 
 fn (mut v Builder) vjs_cc() bool {
@@ -536,7 +535,12 @@ fn (mut v Builder) cc() {
 			ios_sdk := if v.pref.is_ios_simulator { 'iphonesimulator' } else { 'iphoneos' }
 			ios_sdk_path_res := os.execute_or_panic('xcrun --sdk $ios_sdk --show-sdk-path')
 			mut isysroot := ios_sdk_path_res.output.replace('\n', '')
-			ccompiler = 'xcrun --sdk iphoneos clang -isysroot $isysroot'
+			arch := if v.pref.is_ios_simulator {
+				'-arch x86_64'
+			} else {
+				'-arch armv7 -arch armv7s -arch arm64'
+			}
+			ccompiler = 'xcrun --sdk iphoneos clang -isysroot $isysroot $arch'
 		}
 		v.setup_ccompiler_options(ccompiler)
 		v.build_thirdparty_obj_files()
@@ -777,9 +781,12 @@ fn (mut b Builder) cc_linux_cross() {
 		verror(cc_res.output)
 		return
 	}
-	mut linker_args := ['-L $sysroot/usr/lib/x86_64-linux-gnu/', '--sysroot=$sysroot', '-v', '-o $b.pref.out_name',
-		'-m elf_x86_64', '-dynamic-linker /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2', '$sysroot/crt1.o $sysroot/crti.o $obj_file',
-		'-lc', '-lcrypto', '-lssl', '-lpthread', '$sysroot/crtn.o']
+	mut linker_args := ['-L $sysroot/usr/lib/x86_64-linux-gnu/', '--sysroot=$sysroot', '-v',
+		'-o $b.pref.out_name', '-m elf_x86_64',
+		'-dynamic-linker /lib/x86_64-linux-gnu/ld-linux-x86-64.so.2',
+		'$sysroot/crt1.o $sysroot/crti.o $obj_file', '-lc', '-lcrypto', '-lssl', '-lpthread',
+		'$sysroot/crtn.o',
+	]
 	linker_args << cflags.c_options_only_object_files()
 	// -ldl
 	b.dump_c_options(linker_args)
@@ -906,15 +913,15 @@ fn (mut c Builder) cc_windows_cross() {
 	println(c.pref.out_name + ' has been successfully compiled')
 }
 
-fn (mut v Builder) build_thirdparty_obj_files() {
-	v.log('build_thirdparty_obj_files: v.table.cflags: $v.table.cflags')
-	for flag in v.get_os_cflags() {
+fn (mut b Builder) build_thirdparty_obj_files() {
+	b.log('build_thirdparty_obj_files: v.ast.cflags: $b.table.cflags')
+	for flag in b.get_os_cflags() {
 		if flag.value.ends_with('.o') {
-			rest_of_module_flags := v.get_rest_of_module_cflags(flag)
-			if v.pref.ccompiler == 'msvc' {
-				v.build_thirdparty_obj_file_with_msvc(flag.value, rest_of_module_flags)
+			rest_of_module_flags := b.get_rest_of_module_cflags(flag)
+			if b.pref.ccompiler == 'msvc' {
+				b.build_thirdparty_obj_file_with_msvc(flag.value, rest_of_module_flags)
 			} else {
-				v.build_thirdparty_obj_file(flag.value, rest_of_module_flags)
+				b.build_thirdparty_obj_file(flag.value, rest_of_module_flags)
 			}
 		}
 	}
@@ -924,8 +931,13 @@ fn (mut v Builder) build_thirdparty_obj_file(path string, moduleflags []cflag.CF
 	obj_path := os.real_path(path)
 	cfile := '${obj_path[..obj_path.len - 2]}.c'
 	opath := v.pref.cache_manager.postfix_with_key2cpath('.o', obj_path)
+	mut rebuild_reason_message := '$obj_path not found, building it in $opath ...'
 	if os.exists(opath) {
-		return
+		if os.exists(cfile) && os.file_last_mod_unix(opath) < os.file_last_mod_unix(cfile) {
+			rebuild_reason_message = '$opath is older than $cfile, rebuilding ...'
+		} else {
+			return
+		}
 	}
 	if os.exists(obj_path) {
 		// Some .o files are distributed with no source
@@ -935,7 +947,7 @@ fn (mut v Builder) build_thirdparty_obj_file(path string, moduleflags []cflag.CF
 		os.cp(obj_path, opath) or { panic(err) }
 		return
 	}
-	println('$obj_path not found, building it in $opath ...')
+	println(rebuild_reason_message)
 	//
 	// prepare for tcc, it needs relative paths to thirdparty/tcc to work:
 	current_folder := os.getwd()
@@ -961,7 +973,9 @@ fn (mut v Builder) build_thirdparty_obj_file(path string, moduleflags []cflag.CF
 	v.pref.cache_manager.save('.description.txt', obj_path, '${obj_path:-30} @ $cmd\n') or {
 		panic(err)
 	}
-	println(res.output)
+	if res.output != '' {
+		println(res.output)
+	}
 }
 
 fn missing_compiler_info() string {

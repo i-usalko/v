@@ -807,6 +807,21 @@ fn test_sort() {
 	// assert users.map(it.name).join(' ') == 'Alice Bob Peter'
 }
 
+fn test_rune_sort() {
+	mut bs := [`f`, `e`, `d`, `b`, `c`, `a`]
+	bs.sort()
+	println(bs)
+	assert '$bs' == '[`a`, `b`, `c`, `d`, `e`, `f`]'
+
+	bs.sort(a > b)
+	println(bs)
+	assert '$bs' == '[`f`, `e`, `d`, `c`, `b`, `a`]'
+
+	bs.sort(a < b)
+	println(bs)
+	assert '$bs' == '[`a`, `b`, `c`, `d`, `e`, `f`]'
+}
+
 fn test_sort_by_different_order_of_a_b() {
 	mut x := [1, 2, 3]
 	x.sort(a < b)
@@ -882,45 +897,6 @@ fn test_direct_modification() {
 	assert foo[0] == 14
 	assert foo[1] == 2
 	assert foo[2] == 3
-}
-
-fn test_shared_modification() {
-	shared foo := &[2, 0, 5]
-	lock foo {
-		unsafe {
-			foo[1] = 3
-			foo[0] *= 7
-			foo[1]--
-			foo[2] -= 2
-		}
-	}
-	rlock foo {
-		unsafe {
-			assert foo[0] == 14
-			assert foo[1] == 2
-			assert foo[2] == 3
-		}
-	}
-}
-
-[direct_array_access]
-fn test_shared_direct_modification() {
-	shared foo := &[2, 0, 5]
-	lock foo {
-		unsafe {
-			foo[1] = 3
-			foo[0] *= 7
-			foo[1]--
-			foo[2] -= 2
-		}
-	}
-	rlock foo {
-		unsafe {
-			assert foo[0] == 14
-			assert foo[1] == 2
-			assert foo[2] == 3
-		}
-	}
 }
 
 fn test_bools() {
@@ -1103,8 +1079,10 @@ fn test_array_int_pop() {
 	z := a.pop()
 	assert a.len == 3
 	assert z == 4
-	a.pop()
-	a.pop()
+	x1 := a.pop()
+	x2 := a.pop()
+	dump(x1)
+	dump(x2)
 	final := a.pop()
 	assert final == 1
 }

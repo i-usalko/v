@@ -4,6 +4,7 @@
 module websocket
 
 import net
+import net.http
 import x.openssl
 import net.urllib
 import time
@@ -30,6 +31,7 @@ pub:
 	uri    Uri    // uri of current connection
 	id     string // unique id of client
 pub mut:
+	header            http.Header  // headers that will be passed when connecting
 	conn              &net.TcpConn // underlying TCP socket connection
 	nonce_size        int = 16 // size of nounce used for masking
 	panic_on_callback bool     // set to true of callbacks can panic
@@ -85,6 +87,7 @@ pub fn new_client(address string) ?&Client {
 		uri: uri
 		state: .closed
 		id: rand.uuid_v4()
+		header: http.new_header()
 	}
 }
 
@@ -307,8 +310,14 @@ pub fn (mut ws Client) write(bytes []byte, code OPCode) ?int {
 	return ws.write_ptr(byteptr(bytes.data), bytes.len, code)
 }
 
-// write_str, writes a string with a websocket texttype to socket
+// write_string, writes a string with a websocket texttype to socket
+[deprecated: 'use Client.write_string() instead']
 pub fn (mut ws Client) write_str(str string) ?int {
+	return ws.write_string(str)
+}
+
+// write_str, writes a string with a websocket texttype to socket
+pub fn (mut ws Client) write_string(str string) ?int {
 	return ws.write_ptr(str.str, str.len, .text_frame)
 }
 
@@ -480,5 +489,6 @@ pub fn (c &Client) free() {
 		c.error_callbacks.free()
 		c.open_callbacks.free()
 		c.close_callbacks.free()
+		c.header.free()
 	}
 }
