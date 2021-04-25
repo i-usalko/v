@@ -405,10 +405,6 @@ fn (mut g JsGen) stmt(node ast.Stmt) {
 		ast.GlobalDecl {
 			// TODO
 		}
-		ast.GoStmt {
-			g.gen_go_stmt(node)
-			g.writeln('')
-		}
 		ast.GotoLabel {
 			g.writeln('${g.js_name(node.name)}:')
 		}
@@ -499,7 +495,7 @@ fn (mut g JsGen) expr(node ast.Expr) {
 			g.gen_float_literal_expr(node)
 		}
 		ast.GoExpr {
-			// TODO
+			g.gen_go_expr(node)
 		}
 		ast.Ident {
 			g.gen_ident(node)
@@ -617,6 +613,9 @@ fn (mut g JsGen) expr(node ast.Expr) {
 
 // TODO
 fn (mut g JsGen) gen_assert_stmt(a ast.AssertStmt) {
+	if !a.is_used {
+		return
+	}
 	g.writeln('// assert')
 	g.write('if( ')
 	g.expr(a.expr)
@@ -696,7 +695,7 @@ fn (mut g JsGen) gen_assign_stmt(stmt ast.AssignStmt) {
 			} else {
 				g.write(' $op ')
 				// TODO: Multiple types??
-				should_cast := 
+				should_cast :=
 					(g.table.type_kind(stmt.left_types.first()) in js.shallow_equatables)
 					&& (g.cast_stack.len <= 0 || stmt.left_types.first() != g.cast_stack.last())
 
@@ -800,11 +799,14 @@ fn (mut g JsGen) gen_fn_decl(it ast.FnDecl) {
 	g.gen_method_decl(it)
 }
 
-fn fn_has_go(it ast.FnDecl) bool {
+fn fn_has_go(node ast.FnDecl) bool {
 	mut has_go := false
-	for stmt in it.stmts {
-		if stmt is ast.GoStmt {
-			has_go = true
+	for stmt in node.stmts {
+		if stmt is ast.ExprStmt {
+			if stmt.expr is ast.GoExpr {
+				has_go = true
+				break
+			}
 		}
 	}
 	return has_go
@@ -936,7 +938,7 @@ fn (mut g JsGen) gen_for_in_stmt(it ast.ForInStmt) {
 			if it.kind == .string {
 				g.write('Array.from(')
 				g.expr(it.cond)
-				g.write(".str.split(\'\').entries(), ([$it.key_var, $val]) => [$it.key_var, ")
+				g.write('.str.split(\'\').entries(), ([$it.key_var, $val]) => [$it.key_var, ')
 				if g.ns.name == 'builtin' {
 					g.write('new ')
 				}
@@ -989,8 +991,9 @@ fn (mut g JsGen) gen_for_stmt(it ast.ForStmt) {
 	g.writeln('}')
 }
 
-fn (mut g JsGen) gen_go_stmt(node ast.GoStmt) {
-	// x := node.call_expr as ast.CallEpxr // TODO
+fn (mut g JsGen) gen_go_expr(node ast.GoExpr) {
+	// TODO Handle joinable expressions
+	// node.is_expr
 	mut name := node.call_expr.name
 	if node.call_expr.is_method {
 		receiver_sym := g.table.get_type_symbol(node.call_expr.receiver_type)

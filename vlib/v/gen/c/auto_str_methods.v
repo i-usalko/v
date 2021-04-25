@@ -41,8 +41,20 @@ fn (mut g Gen) gen_str_default(sym ast.TypeSymbol, styp string, str_fn_name stri
 }
 
 fn (g &Gen) type_to_fmt(typ ast.Type) string {
+	if typ == ast.byte_type_idx {
+		return '%hhx\\000'
+	}
+	if typ == ast.char_type_idx {
+		return '%c\\000'
+	}
+	if typ == ast.voidptr_type_idx || typ in ast.byteptr_types {
+		return '%p\\000'
+	}
+	if typ in ast.charptr_types {
+		return '%C\\000' // a C string
+	}
 	sym := g.table.get_type_symbol(typ)
-	if typ.is_ptr() && (typ.is_int() || typ.is_float()) {
+	if typ.is_ptr() && (typ.is_int_valptr() || typ.is_float_valptr()) {
 		return '%.*s\\000'
 	} else if sym.kind in [.struct_, .array, .array_fixed, .map, .bool, .enum_, .interface_,
 		.sum_type, .function, .alias] {
@@ -51,6 +63,8 @@ fn (g &Gen) type_to_fmt(typ ast.Type) string {
 		return "'%.*s\\000'"
 	} else if sym.kind in [.f32, .f64] {
 		return '%g\\000' // g removes trailing zeros unlike %f
+	} else if sym.kind == .int {
+		return '%d\\000'
 	} else if sym.kind == .u32 {
 		return '%u\\000'
 	} else if sym.kind == .u64 {
@@ -474,7 +488,7 @@ fn (mut g Gen) gen_str_for_struct(info ast.Struct, styp string, str_fn_name stri
 	if clean_struct_v_type_name.contains('_T_') {
 		// TODO: this is a bit hacky. styp shouldn't be even parsed with _T_
 		// use something different than g.typ for styp
-		clean_struct_v_type_name = 
+		clean_struct_v_type_name =
 			clean_struct_v_type_name.replace('_Array', '_array').replace('_T_', '<').replace('_', ', ') +
 			'>'
 	}
@@ -506,13 +520,16 @@ fn (mut g Gen) gen_str_for_struct(info ast.Struct, styp string, str_fn_name stri
 					fnames2strfunc[field_styp]
 				}
 				g.auto_str_funcs.write_string('indents, ')
-				func := struct_auto_str_func(sym, field.typ, field_styp_fn_name, field.name)
+				mut func := struct_auto_str_func(sym, field.typ, field_styp_fn_name, field.name)
 				// reference types can be "nil"
-				if field.typ.is_ptr() {
+				if field.typ.is_ptr() && !(field.typ in ast.charptr_types
+					|| field.typ in ast.byteptr_types
+					|| field.typ == ast.voidptr_type_idx) {
 					g.auto_str_funcs.write_string('isnil(it.${c_name(field.name)})')
 					g.auto_str_funcs.write_string(' ? _SLIT("nil") : ')
 					// struct, floats and ints have a special case through the _str function
-					if sym.kind != .struct_ && !field.typ.is_int() && !field.typ.is_float() {
+					if sym.kind != .struct_ && !field.typ.is_int_valptr()
+						&& !field.typ.is_float_valptr() {
 						g.auto_str_funcs.write_string('*')
 					}
 				}
@@ -558,8 +575,8 @@ fn struct_auto_str_func(sym &ast.TypeSymbol, field_type ast.Type, fn_name string
 		mut method_str := 'it.${c_name(field_name)}'
 		if sym.kind == .bool {
 			method_str += ' ? _SLIT("true") : _SLIT("false")'
-		} else if (field_type.is_int() || field_type.is_float()) && field_type.is_ptr()
-			&& !expects_ptr {
+		} else if (field_type.is_int_valptr() || field_type.is_float_valptr())
+			&& field_type.is_ptr() && !expects_ptr {
 			// ptr int can be "nil", so this needs to be castet to a string
 			fmt := if sym.kind in [.f32, .f64] {
 				'%g\\000'
@@ -643,9 +660,9 @@ fn (mut g Gen) gen_str_for_interface(info ast.Interface, styp string, str_fn_nam
 		deref := if sym_has_str_method && str_method_expects_ptr { ' ' } else { '*' }
 		value_fmt := if typ == ast.string_type { "'%.*s\\000'" } else { '%.*s\\000' }
 
-		g.auto_str_funcs.write_string('\tif (x._interface_idx == _${styp}_${subtype.cname}_index)')
+		g.auto_str_funcs.write_string('\tif (x._typ == _${styp}_${subtype.cname}_index)')
 		g.auto_str_funcs.write_string(' return _STR("${clean_interface_v_type_name}($value_fmt)", 2, ')
-		g.auto_str_funcs.write_string('${func_name}(${deref}($subtype.cname*)x._object')
+		g.auto_str_funcs.write_string('${func_name}(${deref}($subtype.cname*)x._$subtype.cname')
 		if should_use_indent_func(subtype.kind) && !sym_has_str_method {
 			g.auto_str_funcs.write_string(', indent_count')
 		}

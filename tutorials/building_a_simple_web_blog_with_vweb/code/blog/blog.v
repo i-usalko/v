@@ -8,7 +8,8 @@ import json
 struct App {
 	vweb.Context
 mut:
-	db sqlite.DB
+	db      sqlite.DB [server_var]
+	user_id string
 }
 
 fn main() {
@@ -31,13 +32,17 @@ pub fn (app &App) index() vweb.Result {
 	return $vweb.html()
 }
 
-pub fn (mut app App) init_once() {
+pub fn (mut app App) init_server() {
 	app.db = sqlite.connect('blog.db') or { panic(err) }
-	app.db.exec('create table if not exists article (' + 'id integer primary key, ' +
-		"title text default ''," + "text text default ''" + ');')
+	app.db.create_table('article', [
+		'id integer primary key',
+		"title text default ''",
+		"text text default ''",
+	])
 }
 
-pub fn (mut app App) init() {
+pub fn (mut app App) before_request() {
+	app.user_id = app.get_cookie('id') or { '0' }
 }
 
 pub fn (mut app App) new() vweb.Result {

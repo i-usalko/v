@@ -100,6 +100,7 @@ For more details and troubleshooting, please visit the [vab GitHub repository](h
 * [Builtin functions](#builtin-functions)
 * [Printing custom types](#printing-custom-types)
 * [Modules](#modules)
+    * [Module/package management](#modulepackage-management)
 * [Types 2](#types-2)
     * [Interfaces](#interfaces)
     * [Enums](#enums)
@@ -123,6 +124,7 @@ For more details and troubleshooting, please visit the [vab GitHub repository](h
     * [v fmt](#v-fmt)
     * [Profiling](#profiling)
 * [Advanced Topics](#advanced-topics)
+    * [Dumping expressions at runtime](#dumping-expressions-at-runtime)
     * [Memory-unsafe code](#memory-unsafe-code)
     * [Structs with reference fields](#structs-with-reference-fields)
     * [sizeof and __offsetof](#sizeof-and-__offsetof)
@@ -341,7 +343,7 @@ Note the (important) difference between `:=` and `=`.
 
 ```v failcompile
 fn main() {
-    age = 21
+	age = 21
 }
 ```
 
@@ -372,13 +374,13 @@ In development mode the compiler will warn you that you haven't used the variabl
 In production mode (enabled by passing the `-prod` flag to v – `v -prod foo.v`)
 it will not compile at all (like in Go).
 
-```v failcompile
+```v failcompile nofmt
 fn main() {
-    a := 10
-    if true {
-        a := 20 // error: redefinition of `a`
-    }
-    // warning: unused variable `a`
+	a := 10
+	if true {
+		a := 20 // error: redefinition of `a`
+	}
+	// warning: unused variable `a`
 }
 ```
 
@@ -391,8 +393,8 @@ import ui
 import gg
 
 fn draw(ctx &gg.Context) {
-    gg := ctx.parent.get_ui().gg
-    gg.draw_rect(10, 10, 100, 50)
+	gg := ctx.parent.get_ui().gg
+	gg.draw_rect(10, 10, 100, 50)
 }
 ```
 
@@ -412,7 +414,7 @@ rune // represents a Unicode code point
 
 f32 f64
 
-byteptr, voidptr, charptr, size_t // these are mostly used for C interoperability
+voidptr, size_t // these are mostly used for C interoperability
 
 any // similar to C's void* and Go's interface{}
 ```
@@ -935,9 +937,9 @@ import crypto.sha256
 import mymod.sha256 as mysha256
 
 fn main() {
-    v_hash := sha256.sum('hi'.bytes()).hex()
-    my_hash := mysha256.sum('hi'.bytes()).hex()
-    assert my_hash == v_hash
+	v_hash := mysha256.sum('hi'.bytes()).hex()
+	my_hash := mysha256.sum('hi'.bytes()).hex()
+	assert my_hash == v_hash
 }
 ```
 
@@ -1568,7 +1570,7 @@ For example, here's the `string` type defined in the `builtin` module:
 
 ```v ignore
 struct string {
-    str byteptr
+    str &byte
 pub:
     len int
 }
@@ -1579,9 +1581,9 @@ The byte pointer with the string data is not accessible outside `builtin` at all
 The `len` field is public, but immutable:
 ```v failcompile
 fn main() {
-    str := 'hello'
-    len := str.len // OK
-    str.len++      // Compilation error
+	str := 'hello'
+	len := str.len // OK
+	str.len++ // Compilation error
 }
 ```
 
@@ -2014,7 +2016,7 @@ module mymodule
 
 // To export a function we have to use `pub`
 pub fn say_hi() {
-    println('hello from mymodule!')
+	println('hello from mymodule!')
 }
 ```
 
@@ -2024,7 +2026,7 @@ You can now use `mymodule` in your code:
 import mymodule
 
 fn main() {
-    mymodule.say_hi()
+	mymodule.say_hi()
 }
 ```
 
@@ -2048,6 +2050,88 @@ fn init() {
 
 The `init` function cannot be public - it will be called automatically. This feature is
 particularly useful for initializing a C library.
+
+### Module/package management
+
+Briefly:
+
+```powershell
+v [module option] [param]
+```
+
+###### module options:
+
+```
+   install           Install a module from VPM.
+   remove            Remove a module that was installed from VPM.
+   search            Search for a module from VPM.
+   update            Update an installed module from VPM.
+   upgrade           Upgrade all the outdated modules.
+   list              List all installed modules.
+   outdated          Show installed modules that need updates.
+```
+
+Read more:
+
+You can also install modules already created by someone else with [VPM](https://vpm.vlang.io/):
+```powershell
+v install [module]
+```
+###### Example:
+```powershell
+v install ui
+```
+
+Removing a module with v:
+
+```powershell
+v remove [module]
+```
+###### Example:
+```powershell
+v remove ui
+```
+
+Updating an installed module from [VPM](https://vpm.vlang.io/):
+
+```powershell
+v update [module]
+```
+###### Example:
+```powershell
+v update ui
+```
+
+Or you can update all your modules:
+```powershell
+v update
+```
+
+To see all the modules you have installed, you can use:
+
+```powershell
+v list
+```
+###### Example
+```powershell
+> v list
+Installed modules:
+  markdown
+  ui
+```
+
+To see all the modules you have installed, you can use:
+outdated          Show installed modules that need updates.
+```powershell
+v outdated
+```
+###### Example
+```powershell
+> v outdated
+Modules are up to date.
+```
+
+You can also add your module to VPM by following the instructions on the website https://vpm.vlang.io/new
 
 ## Types 2
 
@@ -2820,7 +2904,7 @@ println(l)
 println(c)
 mut b := Abc{}
 ch2 := chan Abc{}
-res2 := ch2.try_pop(b) // try to perform `b = <-ch2`
+res2 := ch2.try_pop(mut b) // try to perform `b = <-ch2`
 ```
 
 The `try_push/pop()` methods will return immediately with one of the results
@@ -2942,9 +3026,10 @@ fn main() {
 
 ```v failcompile
 module main
+
 // hello_test.v
 fn test_hello() {
-    assert hello() == 'Hello world'
+	assert hello() == 'Hello world'
 }
 ```
 To run the test above, use `v hello_test.v`. This will check that the function `hello` is
@@ -3064,8 +3149,8 @@ fn test() []int {
 
 (This is still in an alpha state)
 
-V has a built-in ORM (object-relational mapping) which supports SQLite,
-and will soon support MySQL, Postgres, MS SQL, and Oracle.
+V has a built-in ORM (object-relational mapping) which supports SQLite and MySQL,
+but soon it will support Postgres, MS SQL, and Oracle.
 
 V's ORM provides a number of benefits:
 
@@ -3081,20 +3166,26 @@ import sqlite
 
 struct Customer {
 	// struct name has to be the same as the table name (for now)
-	id        int // a field named `id` of integer type must be the first field
-	name      string
+	id        int    [primary; sql: serial] // a field named `id` of integer type must be the first field
+	name      string [nonull]
 	nr_orders int
-	country   string
+	country   string [nonull]
 }
 
 db := sqlite.connect('customers.db') ?
+
+// you can create tables
+// CREATE TABLE IF NOT EXISTS `Customer` (`id` INTEGER PRIMARY KEY, `name` TEXT NOT NULL, `nr_orders` INTEGER, `country` TEXT NOT NULL)
+sql db {
+	create table Customer
+}
+
 // select count(*) from Customer
 nr_customers := sql db {
 	select count from Customer
 }
 println('number of all customers: $nr_customers')
 // V syntax can be used to build queries
-// db.select returns an array
 uk_customers := sql db {
 	select from Customer where country == 'uk' && nr_orders > 0
 }
@@ -3117,7 +3208,7 @@ sql db {
 }
 ```
 
-For more examples, see <a href='https://github.com/vlang/v/blob/master/vlib/orm/orm_test.v'>vlib/orm/orm_test.v</a>.
+For more examples and the docs, see <a href='https://github.com/vlang/v/tree/master/vlib/orm'>vlib/orm</a>.
 
 ## Writing Documentation
 
@@ -3194,6 +3285,39 @@ fn main() {
 ```
 
 # Advanced Topics
+
+## Dumping expressions at runtime
+You can dump/trace the value of any V expression using `dump(expr)`.
+For example, save this code sample as `factorial.v`, then run it with
+`v run factorial.v`:
+```v
+fn factorial(n u32) u32 {
+	if dump(n <= 1) {
+		return dump(1)
+	}
+	return dump(n * factorial(n - 1))
+}
+
+fn main() {
+	println(factorial(5))
+}
+```
+You will get:
+```
+[factorial.v:2] n <= 1: false
+[factorial.v:2] n <= 1: false
+[factorial.v:2] n <= 1: false
+[factorial.v:2] n <= 1: false
+[factorial.v:2] n <= 1: true
+[factorial.v:3] 1: 1
+[factorial.v:5] n * factorial(n - 1): 2
+[factorial.v:5] n * factorial(n - 1): 6
+[factorial.v:5] n * factorial(n - 1): 24
+[factorial.v:5] n * factorial(n - 1): 120
+120
+```
+Note that `dump(expr)` will trace both the source location, 
+the expression itself, and the expression value.
 
 ## Memory-unsafe code
 
@@ -3306,26 +3430,26 @@ struct C.sqlite3 {
 struct C.sqlite3_stmt {
 }
 
-type FnSqlite3Callback = fn (voidptr, int, &charptr, &charptr) int
+type FnSqlite3Callback = fn (voidptr, int, &&char, &&char) int
 
-fn C.sqlite3_open(charptr, &&C.sqlite3) int
+fn C.sqlite3_open(&char, &&C.sqlite3) int
 
 fn C.sqlite3_close(&C.sqlite3) int
 
 fn C.sqlite3_column_int(stmt &C.sqlite3_stmt, n int) int
 
 // ... you can also just define the type of parameter and leave out the C. prefix
-fn C.sqlite3_prepare_v2(&C.sqlite3, charptr, int, &&C.sqlite3_stmt, &charptr) int
+fn C.sqlite3_prepare_v2(&C.sqlite3, &char, int, &&C.sqlite3_stmt, &&char) int
 
 fn C.sqlite3_step(&C.sqlite3_stmt)
 
 fn C.sqlite3_finalize(&C.sqlite3_stmt)
 
-fn C.sqlite3_exec(db &C.sqlite3, sql charptr, cb FnSqlite3Callback, cb_arg voidptr, emsg &charptr) int
+fn C.sqlite3_exec(db &C.sqlite3, sql &char, cb FnSqlite3Callback, cb_arg voidptr, emsg &&char) int
 
 fn C.sqlite3_free(voidptr)
 
-fn my_callback(arg voidptr, howmany int, cvalues &charptr, cnames &charptr) int {
+fn my_callback(arg voidptr, howmany int, cvalues &&char, cnames &&char) int {
 	unsafe {
 		for i in 0 .. howmany {
 			print('| ${cstring_to_vstring(cnames[i])}: ${cstring_to_vstring(cvalues[i]):20} ')
@@ -3344,17 +3468,17 @@ fn main() {
 	stmt := &C.sqlite3_stmt(0)
 	// NB: you can also use the `.str` field of a V string,
 	// to get its C style zero terminated representation
-	C.sqlite3_prepare_v2(db, query.str, -1, &stmt, 0)
+	C.sqlite3_prepare_v2(db, &char(query.str), -1, &stmt, 0)
 	C.sqlite3_step(stmt)
 	nr_users := C.sqlite3_column_int(stmt, 0)
 	C.sqlite3_finalize(stmt)
 	println('There are $nr_users users in the database.')
 	//
-	error_msg := charptr(0)
+	error_msg := &char(0)
 	query_all_users := 'select * from users'
-	rc := C.sqlite3_exec(db, query_all_users.str, my_callback, 7, &error_msg)
+	rc := C.sqlite3_exec(db, &char(query_all_users.str), my_callback, voidptr(7), &error_msg)
 	if rc != C.SQLITE_OK {
-		eprintln(cstring_to_vstring(error_msg))
+		eprintln(unsafe { cstring_to_vstring(error_msg) })
 		C.sqlite3_free(error_msg)
 	}
 	C.sqlite3_close(db)
@@ -3431,20 +3555,20 @@ Module {
 
 * Add these lines to the top of your module:
 ```v oksyntax
-#flag -I @VROOT/c
-#flag @VROOT/c/implementation.o
+#flag -I @VMODROOT/c
+#flag @VMODROOT/c/implementation.o
 #include "header.h"
 ```
-NB: @VROOT will be replaced by V with the *nearest parent folder, where there is a v.mod file*.
+NB: @VMODROOT will be replaced by V with the *nearest parent folder, where there is a v.mod file*.
 Any .v file beside or below the folder where the v.mod file is,
-can use `#flag @VROOT/abc` to refer to this folder.
-The @VROOT folder is also *prepended* to the module lookup path,
-so you can *import* other modules under your @VROOT, by just naming them.
+can use `#flag @VMODROOT/abc` to refer to this folder.
+The @VMODROOT folder is also *prepended* to the module lookup path,
+so you can *import* other modules under your @VMODROOT, by just naming them.
 
 The instructions above will make V look for an compiled .o file in
 your module `folder/c/implementation.o`.
 If V finds it, the .o file will get linked to the main executable, that used the module.
-If it does not find it, V assumes that there is a `@VROOT/c/implementation.c` file,
+If it does not find it, V assumes that there is a `@VMODROOT/c/implementation.c` file,
 and tries to compile it to a .o file, then will use that.
 
 This allows you to have C code, that is contained in a V module, so that its distribution is easier.
@@ -3456,8 +3580,8 @@ Another example, demonstrating passing structs from C to V and back again:
 ### C types
 
 Ordinary zero terminated C strings can be converted to V strings with
-`unsafe { charptr(cstring).vstring() }` or if you know their length already with
-`unsafe { charptr(cstring).vstring_with_len(len) }`.
+`unsafe { &char(cstring).vstring() }` or if you know their length already with
+`unsafe { &char(cstring).vstring_with_len(len) }`.
 
 NB: The .vstring() and .vstring_with_len() methods do NOT create a copy of the `cstring`,
 so you should NOT free it after calling the method `.vstring()`.
@@ -3470,9 +3594,9 @@ These can be converted to V strings with `string_from_wide(&u16(cwidestring))` .
 V has these types for easier interoperability with C:
 
 - `voidptr` for C's `void*`,
-- `byteptr` for C's `byte*` and
-- `charptr` for C's `char*`.
-- `&charptr` for C's `char**`
+- `&byte` for C's `byte*` and
+- `&char` for C's `char*`.
+- `&&char` for C's `char**`
 
 To cast a `voidptr` to a V reference, use `user := &User(user_void_ptr)`.
 
@@ -3617,8 +3741,8 @@ Full list of builtin options:
 | ---                           | ---               | ---                   | ---                       |
 | `windows`, `linux`, `macos`   | `gcc`, `tinyc`    | `amd64`, `aarch64`    | `debug`, `prod`, `test`   |
 | `mac`, `darwin`, `ios`,       | `clang`, `mingw`  | `x64`, `x32`          | `js`, `glibc`, `prealloc` |
-| `android`,`mach`, `dragonfly` | `msvc`            | `little_endian`       | `no_bounds_checking`      |
-| `gnu`, `hpux`, `haiku`, `qnx` | `cplusplus`       | `big_endian`          | |
+| `android`,`mach`, `dragonfly` | `msvc`            | `little_endian`       | `no_bounds_checking`, `freestanding`    |
+| `gnu`, `hpux`, `haiku`, `qnx` | `cplusplus`       | `big_endian`          |
 | `solaris`, `linux_or_macos`   | | | |
 
 #### $embed_file
@@ -3780,8 +3904,12 @@ that are substituted at compile time:
 - `@LINE` => replaced with the V line number where it appears (as a string).
 - `@COLUMN` => replaced with the column where it appears (as a string).
 - `@VEXE` => replaced with the path to the V compiler
+- `@VEXEROOT`  => will be substituted with the *folder*,
+   where the V executable is (as a string).
 - `@VHASH`  => replaced with the shortened commit hash of the V compiler (as a string).
 - `@VMOD_FILE` => replaced with the contents of the nearest v.mod file (as a string).
+- `@VMODROOT` => will be substituted with the *folder*,
+   where the nearest v.mod file is (as a string).
 
 That allows you to do the following example, useful while debugging/logging/tracing your code:
 ```v
@@ -4138,6 +4266,11 @@ fn foo() {
 fn bar() {
 	foo() // will not be called if `-d debug` is not passed
 }
+
+// The memory pointed to by the pointer arguments of this function will not be
+// freed by the garbage collector (if in use) before the function returns
+[keep_args_alive]
+fn C.my_external_function(voidptr, int, voidptr) int
 
 // Calls to following function must be in unsafe{} blocks.
 // Note that the code in the body of `risky_business()` will still be

@@ -21,7 +21,7 @@ pub fn utf32_to_str_no_malloc(code u32, buf voidptr) string {
 	icode := int(code) // Prevents doing casts everywhere
 	mut res := ''
 	unsafe {
-		mut buffer := byteptr(buf)
+		mut buffer := &byte(buf)
 		if icode <= 127 {
 			// 0x7F
 			buffer[0] = byte(icode)
@@ -182,7 +182,7 @@ pub fn utf8_str_visible_length(s string) int {
 				if (r >= 0x0f9f8880 && r <= 0xf09f8a8f)
 					|| (r >= 0xf09f8c80 && r <= 0xf09f9c90)
 					|| (r >= 0xf09fa490 && r <= 0xf09fa7af)
-					|| (r >= 0xff0a08080 && r <= 0xf180807f) {
+					|| (r >= 0xf0a08080 && r <= 0xf180807f) {
 					l++
 				}
 			}

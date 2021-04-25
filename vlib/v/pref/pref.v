@@ -17,10 +17,18 @@ pub enum BuildMode {
 	build_module
 }
 
+pub enum AssertFailureMode {
+	default
+	aborts
+	backtraces
+}
+
 pub enum GarbageCollectionMode {
 	no_gc
 	boehm_full // full garbage collection mode
 	boehm_incr // incremental garbage colletion mode
+	boehm_full_opt // full garbage collection mode
+	boehm_incr_opt // incremental garbage colletion mode
 	boehm // default Boehm-GC mode for architecture
 	boehm_leak // leak detection mode (makes `gc_check_leaks()` work)
 }
@@ -76,6 +84,7 @@ pub mut:
 	output_mode OutputMode = .stdout
 	// verbosity           VerboseLevel
 	is_verbose bool
+	is_watch   bool // -watch mode, implemented by cmd/tools/watch.v
 	// nofmt            bool   // disable vfmt
 	is_test           bool   // `v test string_test.v`
 	is_script         bool   // single file mode (`v program.v`), main function can be skipped
@@ -122,19 +131,20 @@ pub mut:
 	// This is on by default, since a vast majority of users do not
 	// work on the builtin module itself.
 	// generating_vh    bool
-	enable_globals bool // allow __global for low level code
-	is_fmt         bool
-	is_vet         bool
-	is_bare        bool
-	no_preludes    bool   // Prevents V from generating preludes in resulting .c files
-	custom_prelude string // Contents of custom V prelude that will be prepended before code in resulting .c files
-	lookup_path    []string
-	output_cross_c bool
-	prealloc       bool
-	vroot          string
-	out_name_c     string // full os.real_path to the generated .tmp.c file; set by builder.
-	out_name       string
-	path           string // Path to file/folder to compile
+	enable_globals   bool // allow __global for low level code
+	is_fmt           bool
+	is_vet           bool
+	is_bare          bool
+	no_preludes      bool   // Prevents V from generating preludes in resulting .c files
+	custom_prelude   string // Contents of custom V prelude that will be prepended before code in resulting .c files
+	lookup_path      []string
+	bare_builtin_dir string // Path to implementation of malloc, memset, etc. Only used if is_bare is true
+	output_cross_c   bool
+	prealloc         bool
+	vroot            string
+	out_name_c       string // full os.real_path to the generated .tmp.c file; set by builder.
+	out_name         string
+	path             string // Path to file/folder to compile
 	// -d vfmt and -d another=0 for `$if vfmt { will execute }` and `$if another ? { will NOT get here }`
 	compile_defines     []string    // just ['vfmt']
 	compile_defines_all []string    // contains both: ['vfmt','another']
@@ -162,6 +172,8 @@ pub mut:
 	cache_manager       vcache.CacheManager
 	is_help             bool // -h, -help or --help was passed
 	gc_mode             GarbageCollectionMode = .no_gc // .no_gc, .boehm, .boehm_leak, ...
+	is_cstrict          bool                  // turn on more C warnings; slightly slower
+	assert_failure_mode AssertFailureMode // whether to call abort() or print_backtrace() after an assertion failure
 	// checker settings:
 	checker_match_exhaustive_cutoff_limit int = 10
 }
@@ -191,6 +203,24 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 				}
 				res.arch = target_arch_kind
 				res.build_options << '$arg $target_arch'
+			}
+			'-assert' {
+				assert_mode := cmdline.option(current_args, '-assert', '')
+				match assert_mode {
+					'aborts' {
+						res.assert_failure_mode = .aborts
+					}
+					'backtraces' {
+						res.assert_failure_mode = .backtraces
+					}
+					else {
+						eprintln('unknown assert mode `-gc $assert_mode`, supported modes are:`')
+						eprintln('  `-assert aborts`     .... calls abort() after assertion failure')
+						eprintln('  `-assert backtraces` .... calls print_backtrace() after assertion failure')
+						exit(1)
+					}
+				}
+				i++
 			}
 			'-show-timings' {
 				res.show_timings = true
@@ -223,6 +253,9 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 			'-silent' {
 				res.output_mode = .silent
 			}
+			'-cstrict' {
+				res.is_cstrict = true
+			}
 			'-gc' {
 				gc_mode := cmdline.option(current_args, '-gc', '')
 				match gc_mode {
@@ -239,6 +272,18 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 						parse_define(mut res, 'gcboehm')
 						parse_define(mut res, 'gcboehm_incr')
 					}
+					'boehm_full_opt' {
+						res.gc_mode = .boehm_full_opt
+						parse_define(mut res, 'gcboehm')
+						parse_define(mut res, 'gcboehm_full')
+						parse_define(mut res, 'gcboehm_opt')
+					}
+					'boehm_incr_opt' {
+						res.gc_mode = .boehm_incr_opt
+						parse_define(mut res, 'gcboehm')
+						parse_define(mut res, 'gcboehm_incr')
+						parse_define(mut res, 'gcboehm_opt')
+					}
 					'boehm' {
 						res.gc_mode = .boehm
 						parse_define(mut res, 'gcboehm')
@@ -249,7 +294,13 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 						parse_define(mut res, 'gcboehm_leak')
 					}
 					else {
-						eprintln('unknown garbage collection mode, only `-gc boehm`, `-gc boehm_incr`, `-gc boehm_full` and `-gc boehm_leak` are supported')
+						eprintln('unknown garbage collection mode `-gc $gc_mode`, supported modes are:`')
+						eprintln('  `-gc boehm` ............ default mode for the platform')
+						eprintln('  `-gc boehm_full` ....... classic full collection')
+						eprintln('  `-gc boehm_incr` ....... incremental collection')
+						eprintln('  `-gc boehm_full_opt` ... optimized classic full collection')
+						eprintln('  `-gc boehm_incr_opt` ... optimized incremental collection')
+						eprintln('  `-gc boehm_leak` ....... leak detection (for debugging)')
 						exit(1)
 					}
 				}
@@ -391,6 +442,9 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 			'-w' {
 				res.skip_warnings = true
 			}
+			'-watch' {
+				res.is_watch = true
+			}
 			'-print-v-files' {
 				res.print_v_files = true
 			}
@@ -458,6 +512,12 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 				path := cmdline.option(current_args, '-path', '')
 				res.build_options << '$arg "$path"'
 				res.lookup_path = path.replace('|', os.path_delimiter).split(os.path_delimiter)
+				i++
+			}
+			'-bare-builtin-dir' {
+				bare_builtin_dir := cmdline.option(current_args, arg, '')
+				res.build_options << '$arg "$bare_builtin_dir"'
+				res.bare_builtin_dir = bare_builtin_dir
 				i++
 			}
 			'-custom-prelude' {
@@ -564,6 +624,9 @@ pub fn parse_args(known_external_commands []string, args []string) (&Preferences
 			eprintln('It looks like you wanted to run "${res.path}.v", so we went ahead and did that since "$res.path" is an execuast.')
 			res.path += '.v'
 		}
+	}
+	if !res.is_bare && res.bare_builtin_dir != '' {
+		eprintln('`-bare-builtin-dir` must be used with `-freestanding`')
 	}
 	if command == 'build-module' {
 		res.build_mode = .build_module

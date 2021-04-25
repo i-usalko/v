@@ -10,7 +10,7 @@ module ttf
 *
 * Note:
 *
-* TODO: 
+* TODO:
 **********************************************************************/
 import math
 import gg
@@ -127,13 +127,13 @@ pub fn (mut tf_skl TTF_render_Sokol) create_texture() {
 		// usage: .dynamic
 		wrap_u: .clamp_to_edge
 		wrap_v: .clamp_to_edge
-		label: &byte(0)
+		label: &char(0)
 		d3d11_texture: 0
 	}
 	// comment for dynamic
-	img_desc.content.subimage[0][0] = C.sg_subimage_content{
+	img_desc.data.subimage[0][0] = C.sg_range{
 		ptr: tf_skl.bmp.buf
-		size: sz
+		size: size_t(sz)
 	}
 
 	simg := C.sg_make_image(&img_desc)
@@ -148,10 +148,10 @@ pub fn (tf_skl TTF_render_Sokol) destroy_texture() {
 // Use only if usage: .dynamic
 pub fn (mut tf_skl TTF_render_Sokol) update_text_texture() {
 	sz := tf_skl.bmp.width * tf_skl.bmp.height * tf_skl.bmp.bp
-	mut tmp_sbc := C.sg_image_content{}
-	tmp_sbc.subimage[0][0] = C.sg_subimage_content{
+	mut tmp_sbc := C.sg_image_data{}
+	tmp_sbc.subimage[0][0] = C.sg_range{
 		ptr: tf_skl.bmp.buf
-		size: sz
+		size: size_t(sz)
 	}
 	C.sg_update_image(tf_skl.sg_img, &tmp_sbc)
 }

@@ -19,8 +19,8 @@ pub type Expr = AnonFn | ArrayDecompose | ArrayInit | AsCast | Assoc | AtExpr | 
 
 pub type Stmt = AsmStmt | AssertStmt | AssignStmt | Block | BranchStmt | CompFor | ConstDecl |
 	DeferStmt | EmptyStmt | EnumDecl | ExprStmt | FnDecl | ForCStmt | ForInStmt | ForStmt |
-	GlobalDecl | GoStmt | GotoLabel | GotoStmt | HashStmt | Import | InterfaceDecl | Module |
-	NodeError | Return | SqlStmt | StructDecl | TypeDecl
+	GlobalDecl | GotoLabel | GotoStmt | HashStmt | Import | InterfaceDecl | Module | NodeError |
+	Return | SqlStmt | StructDecl | TypeDecl
 
 // NB: when you add a new Expr or Stmt type with a .pos field, remember to update
 // the .position() token.Position methods too.
@@ -29,7 +29,7 @@ pub type ScopeObject = AsmRegister | ConstField | GlobalField | Var
 // TODO: replace Param
 pub type Node = CallArg | ConstField | EmptyNode | EnumField | Expr | File | GlobalField |
 	IfBranch | MatchBranch | NodeError | Param | ScopeObject | SelectBranch | Stmt | StructField |
-	StructInitField
+	StructInitField | SumTypeVariant
 
 pub struct TypeNode {
 pub:
@@ -77,9 +77,9 @@ pub:
 	expr     Expr
 	pos      token.Position
 	comments []Comment
-	is_expr  bool
 pub mut:
-	typ Type
+	is_expr bool
+	typ     Type
 }
 
 pub struct IntegerLiteral {
@@ -149,14 +149,18 @@ pub mut:
 }
 
 // root_ident returns the origin ident where the selector started.
-pub fn (e &SelectorExpr) root_ident() Ident {
+pub fn (e &SelectorExpr) root_ident() ?Ident {
 	mut root := e.expr
 	for root is SelectorExpr {
 		// TODO: remove this line
 		selector_expr := root as SelectorExpr
 		root = selector_expr.expr
 	}
-	return root as Ident
+	if root is Ident {
+		return root as Ident
+	}
+
+	return none
 }
 
 // module declaration
@@ -224,10 +228,10 @@ pub mut:
 
 pub struct StructDecl {
 pub:
-	pos       token.Position
-	name      string
-	gen_types []Type
-	is_pub    bool
+	pos           token.Position
+	name          string
+	generic_types []Type
+	is_pub        bool
 	// _pos fields for vfmt
 	mut_pos      int // mut:
 	pub_pos      int // pub:
@@ -259,6 +263,7 @@ pub:
 pub struct InterfaceDecl {
 pub:
 	name         string
+	name_pos     token.Position
 	field_names  []string
 	is_pub       bool
 	methods      []FnDecl
@@ -355,6 +360,7 @@ pub:
 	is_main         bool           // true for `fn main()`
 	is_test         bool           // true for `fn test_abcde`
 	is_conditional  bool           // true for `[if abc] fn abc(){}`
+	is_keep_alive   bool           // passed memory must not be freed (by GC) before function returns
 	receiver        StructField    // TODO this is not a struct field
 	receiver_pos    token.Position // `(u User)` in `fn (u User) name()` position
 	is_method       bool
@@ -365,28 +371,25 @@ pub:
 	language        Language
 	no_body         bool // just a definition `fn C.malloc()`
 	is_builtin      bool // this function is defined in builtin/strconv
-	pos             token.Position // function declaration position
 	body_pos        token.Position // function bodys position
 	file            string
-	generic_params  []GenericParam
+	generic_names   []string
 	is_direct_arr   bool // direct array access
 	attrs           []Attr
 	skip_gen        bool // this function doesn't need to be generated (for example [if foo])
 pub mut:
-	stmts         []Stmt
-	defer_stmts   []DeferStmt
-	return_type   Type
-	has_return    bool
-	comments      []Comment // comments *after* the header, but *before* `{`; used for InterfaceDecl
-	next_comments []Comment // coments that are one line after the decl; used for InterfaceDecl
-	source_file   &File = 0
-	scope         &Scope
-	label_names   []string
-}
-
-pub struct GenericParam {
-pub:
-	name string
+	stmts             []Stmt
+	defer_stmts       []DeferStmt
+	return_type       Type
+	return_type_pos   token.Position // `string` in `fn (u User) name() string` position
+	has_return        bool
+	comments          []Comment // comments *after* the header, but *before* `{`; used for InterfaceDecl
+	next_comments     []Comment // coments that are one line after the decl; used for InterfaceDecl
+	source_file       &File = 0
+	scope             &Scope
+	label_names       []string
+	pos               token.Position // function declaration position
+	cur_generic_types []Type
 }
 
 // break, continue
@@ -407,6 +410,7 @@ pub mut:
 	name               string // left.name()
 	is_method          bool
 	is_field           bool // temp hack, remove ASAP when re-impl CallExpr / Selector (joe)
+	is_keep_alive      bool // GC must not free arguments before fn returns
 	args               []CallArg
 	expected_arg_types []Type
 	language           Language
@@ -416,8 +420,8 @@ pub mut:
 	receiver_type      Type // User
 	return_type        Type
 	should_be_skipped  bool
-	generic_types      []Type
-	generic_list_pos   token.Position
+	concrete_types     []Type // concrete types, e.g. <int, string>
+	concrete_list_pos  token.Position
 	free_receiver      bool // true if the receiver expression needs to be freed
 	scope              &Scope
 	from_embed_type    Type // holds the type of the embed that the method is called from
@@ -477,12 +481,12 @@ pub:
 	is_arg          bool // fn args should not be autofreed
 	is_auto_deref   bool
 pub mut:
-	typ            Type
-	orig_type      Type   // original sumtype type; 0 if it's not a sumtype
-	sum_type_casts []Type // nested sum types require nested smart casting, for that a list of types is needed
+	typ        Type
+	orig_type  Type   // original sumtype type; 0 if it's not a sumtype
+	smartcasts []Type // nested sum types require nested smart casting, for that a list of types is needed
 	// TODO: move this to a real docs site later
 	// 10 <- original type (orig_type)
-	//   [11, 12, 13] <- cast order (sum_type_casts)
+	//   [11, 12, 13] <- cast order (smartcasts)
 	//        12 <- the current casted type (typ)
 	pos        token.Position
 	is_used    bool
@@ -497,15 +501,15 @@ pub mut:
 // struct fields change type in scopes
 pub struct ScopeStructField {
 pub:
-	struct_type    Type // type of struct
-	name           string
-	pos            token.Position
-	typ            Type
-	sum_type_casts []Type // nested sum types require nested smart casting, for that a list of types is needed
-	orig_type      Type   // original sumtype type; 0 if it's not a sumtype
+	struct_type Type // type of struct
+	name        string
+	pos         token.Position
+	typ         Type
+	smartcasts  []Type // nested sum types require nested smart casting, for that a list of types is needed
+	orig_type   Type   // original sumtype type; 0 if it's not a sumtype
 	// TODO: move this to a real docs site later
 	// 10 <- original type (orig_type)
-	//   [11, 12, 13] <- cast order (sum_type_casts)
+	//   [11, 12, 13] <- cast order (smartcasts)
 	//        12 <- the current casted type (typ)
 }
 
@@ -515,6 +519,7 @@ pub:
 	expr     Expr
 	has_expr bool
 	pos      token.Position
+	typ_pos  token.Position
 pub mut:
 	typ      Type
 	comments []Comment
@@ -522,7 +527,8 @@ pub mut:
 
 pub struct GlobalDecl {
 pub:
-	pos token.Position
+	pos      token.Position
+	is_block bool // __global() block
 pub mut:
 	fields       []GlobalField
 	end_comments []Comment
@@ -541,8 +547,11 @@ pub struct File {
 pub:
 	path         string // absolute path of the source file - '/projects/v/file.v'
 	path_base    string // file name - 'file.v' (useful for tracing)
+	lines        int    // number of source code lines in the file (including newlines and comments)
+	bytes        int    // number of processed source code bytes
 	mod          Module // the module of the source file (from `module xyz` at the top)
 	global_scope &Scope
+	is_test      bool // true for _test.v files
 pub mut:
 	scope            &Scope
 	stmts            []Stmt            // all the statements in the source file
@@ -555,6 +564,24 @@ pub mut:
 	notices          []errors.Notice   // all the checker notices in the file
 	generic_fns      []&FnDecl
 	global_labels    []string // from `asm { .globl labelname }`
+}
+
+[unsafe]
+pub fn (f &File) free() {
+	unsafe {
+		f.path.free()
+		f.path_base.free()
+		f.scope.free()
+		f.stmts.free()
+		f.imports.free()
+		f.auto_imports.free()
+		f.embedded_files.free()
+		f.imported_symbols.free()
+		f.errors.free()
+		f.warnings.free()
+		f.notices.free()
+		f.global_labels.free()
+	}
 }
 
 pub struct IdentFn {
@@ -687,9 +714,8 @@ pub:
 	body_pos token.Position
 	comments []Comment
 pub mut:
-	stmts     []Stmt
-	smartcast bool // true when cond is `x is SumType`, set in checker.if_expr // no longer needed with union sum types TODO: remove
-	scope     &Scope
+	stmts []Stmt
+	scope &Scope
 }
 
 pub struct UnsafeExpr {
@@ -908,6 +934,7 @@ pub:
 	is_pub      bool
 	parent_type Type
 	pos         token.Position
+	type_pos    token.Position
 	comments    []Comment
 }
 
@@ -935,6 +962,7 @@ pub:
 	is_pub   bool
 	typ      Type
 	pos      token.Position
+	type_pos token.Position
 	comments []Comment
 }
 
@@ -957,20 +985,12 @@ pub:
 	pos  token.Position
 }
 
-pub struct GoStmt {
-pub:
-	pos token.Position
-pub mut:
-	call_expr CallExpr
-}
-
 pub struct GoExpr {
 pub:
 	pos token.Position
 pub mut:
-	go_stmt GoStmt
-mut:
-	return_type Type
+	call_expr CallExpr
+	is_expr   bool
 }
 
 pub struct GotoLabel {
@@ -1067,7 +1087,7 @@ pub mut:
 	typname   string // TypeSymbol.name
 	expr_type Type   // `byteptr`
 	has_arg   bool
-	in_prexpr bool // is the parent node an PrefixExpr
+	in_prexpr bool // is the parent node a PrefixExpr
 }
 
 pub struct AsmStmt {
@@ -1102,9 +1122,8 @@ pub type AsmArg = AsmAddressing | AsmAlias | AsmDisp | AsmRegister | BoolLiteral
 	FloatLiteral | IntegerLiteral | string
 
 pub struct AsmRegister {
-pub:
-	name string // eax or r12d
-mut:
+pub mut:
+	name string // eax or r12d etc.
 	typ  Type
 	size int
 }
@@ -1117,8 +1136,9 @@ pub:
 
 pub struct AsmAlias {
 pub:
+	pos token.Position
+pub mut:
 	name string // a
-	pos  token.Position
 }
 
 pub struct AsmAddressing {
@@ -1247,7 +1267,8 @@ pub struct AssertStmt {
 pub:
 	pos token.Position
 pub mut:
-	expr Expr
+	expr    Expr
+	is_used bool // asserts are used in _test.v files, as well as in non -prod builds of all files
 }
 
 // `if [x := opt()] {`
@@ -1408,6 +1429,8 @@ pub enum SqlStmtKind {
 	insert
 	update
 	delete
+	create
+	drop
 }
 
 pub struct SqlStmt {
@@ -1473,12 +1496,18 @@ pub fn (expr Expr) position() token.Position {
 			// println('compiler bug, unhandled EmptyExpr position()')
 			return token.Position{}
 		}
-		NodeError, ArrayDecompose, ArrayInit, AsCast, Assoc, AtExpr, BoolLiteral, CallExpr, CastExpr,
-		ChanInit, CharLiteral, ConcatExpr, Comment, ComptimeCall, ComptimeSelector, EnumVal, DumpExpr,
-		FloatLiteral, GoExpr, Ident, IfExpr, IndexExpr, IntegerLiteral, Likely, LockExpr, MapInit,
-		MatchExpr, None, OffsetOf, OrExpr, ParExpr, PostfixExpr, PrefixExpr, RangeExpr, SelectExpr,
-		SelectorExpr, SizeOf, SqlExpr, StringInterLiteral, StringLiteral, StructInit, TypeNode,
-		TypeOf, UnsafeExpr {
+		NodeError, ArrayDecompose, ArrayInit, AsCast, Assoc, AtExpr, BoolLiteral, CallExpr,
+		CastExpr, ChanInit, CharLiteral, ConcatExpr, Comment, ComptimeCall, ComptimeSelector,
+		EnumVal, DumpExpr, FloatLiteral, GoExpr, Ident, IfExpr, IntegerLiteral, Likely, LockExpr,
+		MapInit, MatchExpr, None, OffsetOf, OrExpr, ParExpr, PostfixExpr, PrefixExpr, RangeExpr,
+		SelectExpr, SelectorExpr, SizeOf, SqlExpr, StringInterLiteral, StringLiteral, StructInit,
+		TypeNode, TypeOf, UnsafeExpr {
+			return expr.pos
+		}
+		IndexExpr {
+			if expr.or_expr.kind != .absent {
+				return expr.or_expr.pos
+			}
 			return expr.pos
 		}
 		IfGuardExpr {
@@ -1594,6 +1623,23 @@ pub fn (node Node) position() token.Position {
 				for sym in node.syms {
 					pos = pos.extend(sym.pos)
 				}
+			} else if node is TypeDecl {
+				match node {
+					FnTypeDecl, AliasTypeDecl {
+						pos = pos.extend(node.type_pos)
+					}
+					SumTypeDecl {
+						for variant in node.variants {
+							pos = pos.extend(variant.pos)
+						}
+					}
+				}
+			}
+			if node is AssignStmt {
+				return pos.extend(node.right.last().position())
+			}
+			if node is AssertStmt {
+				return pos.extend(node.expr.position())
 			}
 			return pos
 		}
@@ -1603,8 +1649,12 @@ pub fn (node Node) position() token.Position {
 		StructField {
 			return node.pos.extend(node.type_pos)
 		}
-		MatchBranch, SelectBranch, EnumField, ConstField, StructInitField, GlobalField, Param {
+		MatchBranch, SelectBranch, EnumField, ConstField, StructInitField, GlobalField, CallArg,
+		SumTypeVariant {
 			return node.pos
+		}
+		Param {
+			return node.pos.extend(node.type_pos)
 		}
 		IfBranch {
 			return node.pos.extend(node.body_pos)
@@ -1633,9 +1683,6 @@ pub fn (node Node) position() token.Position {
 				pos = first_pos.extend_with_last_line(last_pos, last_pos.line_nr)
 			}
 			return pos
-		}
-		CallArg {
-			return node.pos
 		}
 	}
 }
@@ -1719,7 +1766,8 @@ pub fn (node Node) children() []Node {
 				children << node.expr
 			}
 			InterfaceDecl {
-				return node.methods.map(Node(Stmt(it)))
+				children << node.methods.map(Node(Stmt(it)))
+				children << node.fields.map(Node(it))
 			}
 			AssignStmt {
 				children << node.left.map(Node(it))
@@ -1747,6 +1795,11 @@ pub fn (node Node) children() []Node {
 				}
 				children << node.params.map(Node(it))
 				children << node.stmts.map(Node(it))
+			}
+			TypeDecl {
+				if node is SumTypeDecl {
+					children << node.variants.map(Node(it))
+				}
 			}
 			else {}
 		}

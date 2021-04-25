@@ -12,6 +12,7 @@ pub const (
 // Ref - https://docs.microsoft.com/en-us/windows/desktop/winprog/windows-data-types
 // A handle to an object.
 pub type HANDLE = voidptr
+pub type HMODULE = voidptr
 
 // win: FILETIME
 // https://docs.microsoft.com/en-us/windows/win32/api/minwinbase/ns-minwinbase-filetime
@@ -63,7 +64,7 @@ mut:
 	dw_flags           u32
 	w_show_window      u16
 	cb_reserved2       u16
-	lp_reserved2       byteptr
+	lp_reserved2       &byte
 	h_std_input        voidptr
 	h_std_output       voidptr
 	h_std_error        voidptr
@@ -76,7 +77,7 @@ mut:
 	b_inherit_handle       bool
 }
 
-fn init_os_args_wide(argc int, argv &byteptr) []string {
+fn init_os_args_wide(argc int, argv &&byte) []string {
 	mut args_ := []string{}
 	for i in 0 .. argc {
 		args_ << unsafe { string_from_wide(&u16(argv[i])) }
@@ -187,7 +188,7 @@ const (
 const (
 	sublang_neutral = 0x00
 	sublang_default = 0x01
-	lang_neutral    = (sublang_neutral)
+	lang_neutral    = sublang_neutral
 )
 
 // Ref - https://docs.microsoft.com/en-us/windows/win32/debug/system-error-codes--12000-15999-
@@ -257,6 +258,7 @@ pub fn execute(cmd string) Result {
 	}
 	proc_info := ProcessInformation{}
 	start_info := StartupInfo{
+		lp_reserved2: 0
 		lp_reserved: 0
 		lp_desktop: 0
 		lp_title: 0
@@ -374,15 +376,32 @@ pub fn debugger_present() bool {
 }
 
 pub fn uname() Uname {
-	// TODO: implement `os.uname()` for windows
-	unknown := 'unknown'
+	// TODO: use Win32 Api functions instead
+	sys_and_ver := execute('cmd /c ver').output.split('[')
+	nodename := execute('cmd /c hostname').output
+	machine := execute('cmd /c echo %PROCESSOR_ARCHITECTURE%').output
 	return Uname{
-		sysname: unknown
-		nodename: unknown
-		release: unknown
-		version: unknown
-		machine: unknown
+		sysname: sys_and_ver[0].trim_space()
+		nodename: nodename
+		release: sys_and_ver[1].replace(']', '')
+		version: sys_and_ver[0] + '[' + sys_and_ver[1]
+		machine: machine
 	}
+}
+
+pub fn hostname() string {
+	hostname := [255]u16{}
+	size := u32(255)
+	res := C.GetComputerNameW(&hostname[0], &size)
+	if !res {
+		return error(get_error_msg(int(C.GetLastError())))
+	}
+	return unsafe { string_from_wide(&hostname[0]) }
+}
+
+pub fn loginname() string {
+	// TODO: use C.GetUserName(&char, u32) bool instead
+	return execute('cmd /c echo %USERNAME%').output
 }
 
 // `is_writable_folder` - `folder` exists and is writable to the process

@@ -150,6 +150,8 @@ pub fn (t Type) nr_muls() int {
 // return true if `t` is a pointer (nr_muls>0)
 [inline]
 pub fn (t Type) is_ptr() bool {
+	// any normal pointer, i.e. &Type, &&Type etc;
+	// NB: voidptr, charptr and byteptr are NOT included!
 	return (int(t) >> 16) & 0xff > 0
 }
 
@@ -270,20 +272,40 @@ pub fn new_type_ptr(idx int, nr_muls int) Type {
 	return (nr_muls << 16) | u16(idx)
 }
 
-// built in pointers (voidptr, byteptr, charptr)
 [inline]
 pub fn (typ Type) is_pointer() bool {
+	// builtin pointer types (voidptr, byteptr, charptr)
 	return typ.idx() in ast.pointer_type_idxs
 }
 
 [inline]
 pub fn (typ Type) is_float() bool {
-	return typ.idx() in ast.float_type_idxs
+	return typ.clear_flags() in ast.float_type_idxs
 }
 
 [inline]
 pub fn (typ Type) is_int() bool {
+	return typ.clear_flags() in ast.integer_type_idxs
+}
+
+[inline]
+pub fn (typ Type) is_int_valptr() bool {
 	return typ.idx() in ast.integer_type_idxs
+}
+
+[inline]
+pub fn (typ Type) is_float_valptr() bool {
+	return typ.idx() in ast.float_type_idxs
+}
+
+[inline]
+pub fn (typ Type) is_pure_int() bool {
+	return int(typ) in ast.integer_type_idxs
+}
+
+[inline]
+pub fn (typ Type) is_pure_float() bool {
+	return int(typ) in ast.float_type_idxs
 }
 
 [inline]
@@ -298,12 +320,12 @@ pub fn (typ Type) is_unsigned() bool {
 
 [inline]
 pub fn (typ Type) is_int_literal() bool {
-	return typ.idx() == ast.int_literal_type_idx
+	return int(typ) == ast.int_literal_type_idx
 }
 
 [inline]
 pub fn (typ Type) is_number() bool {
-	return typ.idx() in ast.number_type_idxs
+	return typ.clear_flags() in ast.number_type_idxs
 }
 
 [inline]
@@ -386,6 +408,8 @@ pub const (
 	int_literal_type   = new_type(int_literal_type_idx)
 	thread_type        = new_type(thread_type_idx)
 	error_type         = new_type(error_type_idx)
+	charptr_types      = [charptr_type, new_type(char_type_idx).set_nr_muls(1)]
+	byteptr_types      = [byteptr_type, new_type(byte_type_idx).set_nr_muls(1)]
 )
 
 pub const (
@@ -687,19 +711,22 @@ pub struct Struct {
 pub:
 	attrs []Attr
 pub mut:
-	embeds        []Type
-	fields        []StructField
-	is_typedef    bool // C. [typedef]
-	is_union      bool
-	is_heap       bool
-	generic_types []Type
+	embeds         []Type
+	fields         []StructField
+	is_typedef     bool // C. [typedef]
+	is_union       bool
+	is_heap        bool
+	is_generic     bool
+	generic_types  []Type
+	concrete_types []Type
+	parent_type    Type
 }
 
 // instantiation of a generic struct
 pub struct GenericStructInst {
 pub mut:
-	parent_idx    int // idx of the base generic struct
-	generic_types []Type
+	parent_idx     int    // idx of the base generic struct
+	concrete_types []Type // concrete types, e.g. <int, string>
 }
 
 pub struct Interface {
@@ -729,11 +756,6 @@ mut:
 pub:
 	types []Type
 }
-
-// NB: FExpr here is a actually an ast.Expr .
-// It should always be used by casting to ast.Expr, using ast.fe2ex()/ast.ex2fe()
-// That hack is needed to break an import cycle between v.ast and v.ast .
-// pub type FExpr = byteptr | voidptr
 
 /*
 pub struct Field {
@@ -813,8 +835,14 @@ pub fn (mytable &Table) type_to_code(t Type) string {
 }
 
 // import_aliases is a map of imported symbol aliases 'module.Type' => 'Type'
-pub fn (mytable &Table) type_to_str_using_aliases(t Type, import_aliases map[string]string) string {
-	sym := mytable.get_type_symbol(t)
+pub fn (t &Table) type_to_str_using_aliases(typ Type, import_aliases map[string]string) string {
+	/*
+	if t.pref.is_verbose {
+	print_backtrace()
+	exit(0)
+	}
+	*/
+	sym := t.get_type_symbol(typ)
 	mut res := sym.name
 	match sym.kind {
 		.int_literal, .float_literal {
@@ -823,23 +851,29 @@ pub fn (mytable &Table) type_to_str_using_aliases(t Type, import_aliases map[str
 		.i8, .i16, .int, .i64, .byte, .u16, .u32, .u64, .f32, .f64, .char, .rune, .string, .bool,
 		.none_, .byteptr, .voidptr, .charptr {
 			// primitive types
-			res = sym.kind.str()
+			if sym.kind == .byteptr {
+				res = '&byte'
+			} else if sym.kind == .charptr {
+				res = '&char'
+			} else {
+				res = sym.kind.str()
+			}
 		}
 		.array {
-			if t == ast.array_type {
+			if typ == ast.array_type {
 				return 'array'
 			}
-			if t.has_flag(.variadic) {
-				res = mytable.type_to_str_using_aliases(mytable.value_type(t), import_aliases)
+			if typ.has_flag(.variadic) {
+				res = t.type_to_str_using_aliases(t.value_type(typ), import_aliases)
 			} else {
 				info := sym.info as Array
-				elem_str := mytable.type_to_str_using_aliases(info.elem_type, import_aliases)
+				elem_str := t.type_to_str_using_aliases(info.elem_type, import_aliases)
 				res = '[]$elem_str'
 			}
 		}
 		.array_fixed {
 			info := sym.info as ArrayFixed
-			elem_str := mytable.type_to_str_using_aliases(info.elem_type, import_aliases)
+			elem_str := t.type_to_str_using_aliases(info.elem_type, import_aliases)
 			res = '[$info.size]$elem_str'
 		}
 		.chan {
@@ -852,63 +886,78 @@ pub fn (mytable &Table) type_to_str_using_aliases(t Type, import_aliases map[str
 					mut_str = 'mut '
 					elem_type = elem_type.set_nr_muls(elem_type.nr_muls() - 1)
 				}
-				elem_str := mytable.type_to_str_using_aliases(elem_type, import_aliases)
+				elem_str := t.type_to_str_using_aliases(elem_type, import_aliases)
 				res = 'chan $mut_str$elem_str'
 			}
 		}
 		.function {
 			info := sym.info as FnType
-			if !mytable.is_fmt {
-				res = mytable.fn_signature(info.func, type_only: true)
+			if !t.is_fmt {
+				res = t.fn_signature(info.func, type_only: true)
 			} else {
 				if res.starts_with('fn (') {
 					// fn foo ()
-					res = mytable.fn_signature(info.func, type_only: true)
+					res = t.fn_signature(info.func, type_only: true)
 				} else {
 					// FnFoo
-					res = mytable.shorten_user_defined_typenames(res, import_aliases)
+					res = t.shorten_user_defined_typenames(res, import_aliases)
 				}
 			}
 		}
 		.map {
-			if int(t) == ast.map_type_idx {
+			if int(typ) == ast.map_type_idx {
 				return 'map'
 			}
 			info := sym.info as Map
-			key_str := mytable.type_to_str_using_aliases(info.key_type, import_aliases)
-			val_str := mytable.type_to_str_using_aliases(info.value_type, import_aliases)
+			key_str := t.type_to_str_using_aliases(info.key_type, import_aliases)
+			val_str := t.type_to_str_using_aliases(info.value_type, import_aliases)
 			res = 'map[$key_str]$val_str'
 		}
 		.multi_return {
 			res = '('
 			info := sym.info as MultiReturn
-			for i, typ in info.types {
+			for i, typ2 in info.types {
 				if i > 0 {
 					res += ', '
 				}
-				res += mytable.type_to_str_using_aliases(typ, import_aliases)
+				res += t.type_to_str_using_aliases(typ2, import_aliases)
 			}
 			res += ')'
 		}
+		.struct_ {
+			if typ.has_flag(.generic) {
+				info := sym.info as Struct
+				res += '<'
+				for i, gtyp in info.generic_types {
+					res += t.get_type_symbol(gtyp).name
+					if i != info.generic_types.len - 1 {
+						res += ', '
+					}
+				}
+				res += '>'
+			} else {
+				res = t.shorten_user_defined_typenames(res, import_aliases)
+			}
+		}
 		.void {
-			if t.has_flag(.optional) {
+			if typ.has_flag(.optional) {
 				return '?'
 			}
 			return 'void'
 		}
 		else {
-			res = mytable.shorten_user_defined_typenames(res, import_aliases)
+			res = t.shorten_user_defined_typenames(res, import_aliases)
 		}
 	}
-	mut nr_muls := t.nr_muls()
-	if t.has_flag(.shared_f) {
+	mut nr_muls := typ.nr_muls()
+	if typ.has_flag(.shared_f) {
 		nr_muls--
 		res = 'shared ' + res
 	}
 	if nr_muls > 0 {
 		res = strings.repeat(`&`, nr_muls) + res
 	}
-	if t.has_flag(.optional) {
+	if typ.has_flag(.optional) {
 		res = '?' + res
 	}
 	return res

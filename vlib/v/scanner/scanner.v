@@ -758,8 +758,10 @@ fn (mut s Scanner) text_scan() token.Token {
 				return s.new_token(.question, '', 1)
 			}
 			scanner.single_quote, scanner.double_quote {
+				start_line := s.line_nr
 				ident_string := s.ident_string()
-				return s.new_token(.string, ident_string, ident_string.len + 2) // + two quotes
+				return s.new_multiline_token(.string, ident_string, ident_string.len + 2,
+					start_line) // + two quotes
 			}
 			`\`` {
 				// ` // apostrophe balance comment. do not remove
@@ -1092,9 +1094,12 @@ fn (mut s Scanner) ident_string() string {
 	// }
 	mut n_cr_chars := 0
 	mut start := s.pos
-	if s.text[start] == s.quote
-		|| (s.text[start] == s.inter_quote && (s.is_inter_start || s.is_enclosed_inter)) {
+	start_char := s.text[start]
+	if start_char == s.quote
+		|| (start_char == s.inter_quote && (s.is_inter_start || s.is_enclosed_inter)) {
 		start++
+	} else if start_char == `\n` {
+		s.inc_line_number()
 	}
 	s.is_inside_string = false
 	mut u_escapes_pos := []int{} // pos list of \uXXXX
@@ -1374,6 +1379,7 @@ fn (mut s Scanner) vet_error(msg string, fix vet.FixKind) {
 		}
 		kind: .error
 		fix: fix
+		typ: .default
 	}
 	s.vet_errors << ve
 }

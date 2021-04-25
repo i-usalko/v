@@ -24,7 +24,7 @@ fn test_inline_asm() {
 		mov f, d
 		add f, e
 		add f, 5
-		; +r (f) // output 
+		; +r (f) // output
 		; r (d)
 		  r (e) // input
 	}
@@ -45,7 +45,7 @@ fn test_inline_asm() {
 
 	mut j := 0
 	// do 5*3
-	// adding three, five times 
+	// adding three, five times
 	asm amd64 {
 		mov rcx, 5 // loop 5 times
 		loop_start:
@@ -92,10 +92,40 @@ fn test_inline_asm() {
 		addq [in_data + rcx * 4 + 0], 2
 		; ; c (n.len - 1) // c is counter (loop) register
 		  r (n.data) as in_data
+		; memory
 	}
 	assert n == [7, 11, 2, 6]
 
-	assert util.add(8, 9, 34, 7) == 58 // test .amd64.v files
+	assert util.add(8, 9, 34, 7) == 58 // test .amd64.v imported files
+
+	mut manu := Manu{}
+	asm amd64 {
+		mov eax, 0
+		cpuid
+		; =b (manu.ebx) as ebx0
+		  =d (manu.edx) as edx0
+		  =c (manu.ecx) as ecx0
+	}
+	manu.str()
+}
+
+[packed]
+struct Manu {
+mut:
+	ebx  u32
+	edx  u32
+	ecx  u32
+	zero byte // for string
+}
+
+fn (m Manu) str() string {
+	return unsafe {
+		string{
+			str: &byte(&m)
+			len: 24
+			is_lit: 1
+		}
+	}
 }
 
 // this test does not appear in i386 test since rip relative addressing was introduced in 64-bit mode

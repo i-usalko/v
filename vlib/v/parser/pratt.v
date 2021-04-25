@@ -19,6 +19,11 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 	if !p.pref.is_fmt {
 		p.eat_comments({})
 	}
+	inside_array_lit := p.inside_array_lit
+	p.inside_array_lit = false
+	defer {
+		p.inside_array_lit = inside_array_lit
+	}
 	// Prefix
 	match p.tok.kind {
 		.key_mut, .key_shared, .key_atomic, .key_static {
@@ -92,12 +97,9 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 			}
 		}
 		.key_go {
-			stmt := p.stmt(false)
-			go_stmt := stmt as ast.GoStmt
-			node = ast.GoExpr{
-				go_stmt: go_stmt
-				pos: go_stmt.pos
-			}
+			mut go_expr := p.go_expr()
+			go_expr.is_expr = true
+			node = go_expr
 		}
 		.key_true, .key_false {
 			node = ast.BoolLiteral{
@@ -325,6 +327,12 @@ pub fn (mut p Parser) expr(precedence int) ast.Expr {
 			}
 		}
 	}
+	if inside_array_lit {
+		if p.tok.kind in [.minus, .mul, .amp, .arrow] && p.tok.pos + 1 == p.peek_tok.pos
+			&& p.prev_tok.pos + p.prev_tok.len + 1 != p.peek_tok.pos {
+			return node
+		}
+	}
 	return p.expr_with_left(node, precedence, is_stmt_ident)
 }
 
@@ -447,7 +455,8 @@ fn (mut p Parser) infix_expr(left ast.Expr) ast.Expr {
 	p.expecting_type = prev_expecting_type
 	if p.pref.is_vet && op in [.key_in, .not_in] && right is ast.ArrayInit
 		&& (right as ast.ArrayInit).exprs.len == 1 {
-		p.vet_error('Use `var == value` instead of `var in [value]`', pos.line_nr, vet.FixKind.vfmt)
+		p.vet_error('Use `var == value` instead of `var in [value]`', pos.line_nr, vet.FixKind.vfmt,
+			.default)
 	}
 	mut or_stmts := []ast.Stmt{}
 	mut or_kind := ast.OrKind.absent
@@ -489,6 +498,29 @@ fn (mut p Parser) infix_expr(left ast.Expr) ast.Expr {
 	}
 }
 
+fn (mut p Parser) go_expr() ast.GoExpr {
+	p.next()
+	spos := p.tok.position()
+	expr := p.expr(0)
+	call_expr := if expr is ast.CallExpr {
+		expr
+	} else {
+		p.error_with_pos('expression in `go` must be a function call', expr.position())
+		ast.CallExpr{
+			scope: p.scope
+		}
+	}
+	pos := spos.extend(p.prev_tok.position())
+	return ast.GoExpr{
+		call_expr: call_expr
+		pos: pos
+	}
+}
+
+fn (p &Parser) fileis(s string) bool {
+	return p.file_name.contains(s)
+}
+
 fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 	mut pos := p.tok.position()
 	op := p.tok.kind
@@ -503,11 +535,7 @@ fn (mut p Parser) prefix_expr() ast.PrefixExpr {
 	// p.warn('unsafe')
 	// }
 	p.next()
-	mut right := if op == .minus {
-		p.expr(int(token.Precedence.call))
-	} else {
-		p.expr(int(token.Precedence.prefix))
-	}
+	mut right := p.expr(int(token.Precedence.prefix))
 	p.is_amp = false
 	if mut right is ast.CastExpr {
 		right.in_prexpr = true

@@ -428,9 +428,6 @@ pub fn (mut f Fmt) stmt(node ast.Stmt) {
 		ast.GlobalDecl {
 			f.global_decl(node)
 		}
-		ast.GoStmt {
-			f.go_stmt(node, false)
-		}
 		ast.GotoLabel {
 			f.goto_label(node)
 		}
@@ -541,7 +538,7 @@ pub fn (mut f Fmt) expr(node ast.Expr) {
 			f.write(node.val)
 		}
 		ast.GoExpr {
-			f.go_stmt(node.go_stmt, true)
+			f.go_expr(node)
 		}
 		ast.Ident {
 			f.ident(node)
@@ -668,7 +665,13 @@ fn expr_is_single_line(expr ast.Expr) bool {
 //=== Specific Stmt methods ===//
 
 fn (mut f Fmt) asm_stmt(stmt ast.AsmStmt) {
-	f.writeln('asm $stmt.arch {')
+	f.write('asm ')
+	if stmt.is_volatile {
+		f.write('volatile ')
+	} else if stmt.is_goto {
+		f.write('goto ')
+	}
+	f.writeln('$stmt.arch {')
 	f.indent++
 	for template in stmt.templates {
 		if template.is_directive {
@@ -678,7 +681,9 @@ fn (mut f Fmt) asm_stmt(stmt ast.AsmStmt) {
 		if template.is_label {
 			f.write(':')
 		} else {
-			f.write(' ')
+			if template.args.len > 0 {
+				f.write(' ')
+			}
 		}
 		for i, arg in template.args {
 			f.asm_arg(arg)
@@ -1078,21 +1083,23 @@ pub fn (mut f Fmt) for_stmt(node ast.ForStmt) {
 }
 
 pub fn (mut f Fmt) global_decl(node ast.GlobalDecl) {
-	single := node.fields.len == 1
-	if single {
-		f.write('__global ( ')
-	} else {
-		f.writeln('__global (')
-		f.indent++
+	if node.fields.len == 0 && node.pos.line_nr == node.pos.last_line {
+		f.writeln('__global ()')
+		return
 	}
+	f.write('__global ')
 	mut max := 0
-	mut has_assign := false
-	for field in node.fields {
-		if field.name.len > max {
-			max = field.name.len
-		}
-		if field.has_expr {
-			has_assign = true
+	// mut has_assign := false
+	if node.is_block {
+		f.writeln('(')
+		f.indent++
+		for field in node.fields {
+			if field.name.len > max {
+				max = field.name.len
+			}
+			// if field.has_expr {
+			// has_assign = true
+			//}
 		}
 	}
 	for field in node.fields {
@@ -1106,28 +1113,24 @@ pub fn (mut f Fmt) global_decl(node ast.GlobalDecl) {
 			f.expr(field.expr)
 			f.write(')')
 		} else {
-			if !single && has_assign {
-				f.write('  ')
-			}
-			f.write('${f.table.type_to_str_using_aliases(field.typ, f.mod2alias)} ')
+			f.write('${f.table.type_to_str_using_aliases(field.typ, f.mod2alias)}')
 		}
-		if !single {
+		if node.is_block {
 			f.writeln('')
 		}
 	}
-	if !single {
-		f.indent--
-	}
 	f.comments_after_last_field(node.end_comments)
-	f.writeln(')\n')
-}
-
-pub fn (mut f Fmt) go_stmt(node ast.GoStmt, is_expr bool) {
-	f.write('go ')
-	f.expr(node.call_expr)
-	if !is_expr {
+	if node.is_block {
+		f.indent--
+		f.writeln(')')
+	} else {
 		f.writeln('')
 	}
+}
+
+pub fn (mut f Fmt) go_expr(node ast.GoExpr) {
+	f.write('go ')
+	f.expr(node.call_expr)
 }
 
 pub fn (mut f Fmt) goto_label(node ast.GotoLabel) {
@@ -1162,6 +1165,7 @@ pub fn (mut f Fmt) interface_decl(node ast.InterfaceDecl) {
 			ft = f.short_module(ft)
 		}
 		f.writeln('\t$field.name $ft')
+		f.mark_types_import_as_used(field.typ)
 	}
 	for method in node.methods {
 		f.write('\t')
@@ -1169,6 +1173,10 @@ pub fn (mut f Fmt) interface_decl(node ast.InterfaceDecl) {
 		f.comments(method.comments, inline: true, has_nl: false, level: .indent)
 		f.writeln('')
 		f.comments(method.next_comments, inline: false, has_nl: true, level: .indent)
+		for param in method.params {
+			f.mark_types_import_as_used(param.typ)
+		}
+		f.mark_types_import_as_used(method.return_type)
 	}
 	f.writeln('}\n')
 }
@@ -1231,6 +1239,12 @@ pub fn (mut f Fmt) sql_stmt(node ast.SqlStmt) {
 			f.write('delete from $table_name where ')
 			f.expr(node.where_expr)
 			f.writeln('')
+		}
+		.create {
+			f.writeln('create table $table_name')
+		}
+		.drop {
+			f.writeln('drop table $table_name')
 		}
 	}
 	f.writeln('}')
@@ -1301,6 +1315,7 @@ pub fn (mut f Fmt) fn_type_decl(node ast.FnTypeDecl) {
 	}
 
 	f.comments(node.comments, has_nl: false)
+	f.writeln('')
 }
 
 pub fn (mut f Fmt) sum_type_decl(node ast.SumTypeDecl) {
@@ -1584,11 +1599,11 @@ pub fn (mut f Fmt) call_expr(node ast.CallExpr) {
 }
 
 fn (mut f Fmt) write_generic_if_require(node ast.CallExpr) {
-	if node.generic_types.len > 0 {
+	if node.concrete_types.len > 0 {
 		f.write('<')
-		for i, generic_type in node.generic_types {
-			is_last := i == node.generic_types.len - 1
-			f.write(f.table.type_to_str(generic_type))
+		for i, concrete_type in node.concrete_types {
+			is_last := i == node.concrete_types.len - 1
+			f.write(f.table.type_to_str(concrete_type))
 			if !is_last {
 				f.write(', ')
 			}
@@ -1873,76 +1888,89 @@ pub fn (mut f Fmt) infix_expr(node ast.InfixExpr) {
 	if !buffering_save && f.buffering {
 		f.buffering = false
 		if !f.single_line_if && f.line_len > fmt.max_len.last() {
-			f.wrap_infix(start_pos, start_len, false)
+			is_cond := node.op in [.and, .logical_or]
+			f.wrap_infix(start_pos, start_len, is_cond)
 		}
 	}
 	f.is_assign = is_assign_save
 	f.or_expr(node.or_block)
 }
 
-pub fn (mut f Fmt) wrap_infix(start_pos int, start_len int, ignore_paren bool) {
+pub fn (mut f Fmt) wrap_infix(start_pos int, start_len int, is_cond bool) {
 	cut_span := f.out.len - start_pos
-	condstr := f.out.cut_last(cut_span)
-	is_cond_infix := condstr.contains_any_substr(['&&', '||'])
-	if !is_cond_infix && !condstr.contains('+') {
-		f.write(condstr)
+	infix_str := f.out.cut_last(cut_span)
+	if !infix_str.contains_any_substr(['&&', '||', '+']) {
+		f.write(infix_str)
 		return
 	}
 	f.line_len = start_len
 	if start_len == 0 {
 		f.empty_line = true
 	}
-	or_pen := if condstr.contains('&&') { 3 } else { 5 }
-	cond_parts := condstr.split(' ')
-	mut grouped_cond := false
+	conditions, penalties := split_up_infix(infix_str, false, is_cond)
+	f.write_splitted_infix(conditions, penalties, false, is_cond)
+}
+
+fn split_up_infix(infix_str string, ignore_paren bool, is_cond_infix bool) ([]string, []int) {
 	mut conditions := ['']
 	mut penalties := [5]
-	mut index := 0
-	for cp in cond_parts {
-		if is_cond_infix && cp in ['&&', '||'] {
-			if grouped_cond {
-				conditions[index] += '$cp '
+	or_pen := if infix_str.contains('&&') { 3 } else { 5 }
+	parts := infix_str.split(' ')
+	mut inside_paren := false
+	mut ind := 0
+	for p in parts {
+		if is_cond_infix && p in ['&&', '||'] {
+			if inside_paren {
+				conditions[ind] += '$p '
 			} else {
-				p := if cp == '||' { or_pen } else { 5 }
-				penalties << p
-				conditions << '$cp '
-				index++
+				pen := if p == '||' { or_pen } else { 5 }
+				penalties << pen
+				conditions << '$p '
+				ind++
 			}
-		} else if !is_cond_infix && cp == '+' {
+		} else if !is_cond_infix && p == '+' {
 			penalties << 5
-			conditions[index] += '$cp '
+			conditions[ind] += '$p '
 			conditions << ''
-			index++
+			ind++
 		} else {
-			conditions[index] += '$cp '
+			conditions[ind] += '$p '
 			if ignore_paren {
 				continue
 			}
-			if cp.starts_with('(') {
-				grouped_cond = true
-			} else if cp.ends_with(')') {
-				grouped_cond = false
+			if p.starts_with('(') {
+				inside_paren = true
+			} else if p.ends_with(')') {
+				inside_paren = false
 			}
 		}
 	}
-	for i, c in conditions {
-		cnd := c.trim_space()
-		if f.line_len + cnd.len < fmt.max_len[penalties[i]] {
-			if (i > 0 && i < conditions.len) || (ignore_paren && i == 0 && cnd[3] == `(`) {
+	return conditions, penalties
+}
+
+fn (mut f Fmt) write_splitted_infix(conditions []string, penalties []int, ignore_paren bool, is_cond bool) {
+	for i, cnd in conditions {
+		c := cnd.trim_space()
+		if f.line_len + c.len < fmt.max_len[penalties[i]] {
+			if (i > 0 && i < conditions.len) || (ignore_paren && i == 0 && c.len > 5 && c[3] == `(`) {
 				f.write(' ')
 			}
-			f.write(cnd)
+			f.write(c)
 		} else {
-			prev_len := f.line_len
-			prev_pos := f.out.len
+			is_paren_expr := (c[0] == `(` || (c.len > 5 && c[3] == `(`)) && c.ends_with(')')
+			final_len := ((f.indent + 1) * 4) + c.len
+			if final_len > fmt.max_len.last() && is_paren_expr {
+				conds, pens := split_up_infix(c, true, is_cond)
+				f.write_splitted_infix(conds, pens, true, is_cond)
+				continue
+			}
+			if i == 0 {
+				f.remove_new_line({})
+			}
 			f.writeln('')
 			f.indent++
-			f.write(cnd)
+			f.write(c)
 			f.indent--
-			if f.line_len > fmt.max_len.last() && (cnd[0] == `(` || cnd[3] == `(`)
-				&& cnd.ends_with(')') {
-				f.wrap_infix(prev_pos, prev_len, true)
-			}
 		}
 	}
 }
@@ -2035,6 +2063,49 @@ pub fn (mut f Fmt) map_init(node ast.MapInit) {
 	f.write('}')
 }
 
+fn (mut f Fmt) match_branch(branch ast.MatchBranch, single_line bool) {
+	if !branch.is_else {
+		// normal branch
+		f.is_mbranch_expr = true
+		for j, expr in branch.exprs {
+			estr := f.node_str(expr)
+			if f.line_len + estr.len + 2 > fmt.max_len[5] {
+				f.remove_new_line({})
+				f.writeln('')
+			}
+			f.write(estr)
+			if j < branch.ecmnts.len && branch.ecmnts[j].len > 0 {
+				f.write(' ')
+				f.comments(branch.ecmnts[j], iembed: true)
+			}
+			if j < branch.exprs.len - 1 {
+				f.write(', ')
+			}
+		}
+		f.is_mbranch_expr = false
+	} else {
+		// else branch
+		f.write('else')
+	}
+	if branch.stmts.len == 0 {
+		f.writeln(' {}')
+	} else {
+		if single_line {
+			f.write(' { ')
+		} else {
+			f.writeln(' {')
+		}
+		f.stmts(branch.stmts)
+		if single_line {
+			f.remove_new_line({})
+			f.writeln(' }')
+		} else {
+			f.writeln('}')
+		}
+	}
+	f.comments(branch.post_comments, inline: true)
+}
+
 pub fn (mut f Fmt) match_expr(node ast.MatchExpr) {
 	f.write('match ')
 	f.expr(node.cond)
@@ -2058,43 +2129,16 @@ pub fn (mut f Fmt) match_expr(node ast.MatchExpr) {
 			break
 		}
 	}
-	for branch in node.branches {
-		if !branch.is_else {
-			// normal branch
-			f.is_mbranch_expr = true
-			for j, expr in branch.exprs {
-				f.expr(expr)
-				if j < branch.ecmnts.len && branch.ecmnts[j].len > 0 {
-					f.write(' ')
-					f.comments(branch.ecmnts[j], iembed: true)
-				}
-				if j < branch.exprs.len - 1 {
-					f.write(', ')
-				}
-				f.wrap_long_line(4, false)
-			}
-			f.is_mbranch_expr = false
-		} else {
-			// else branch
-			f.write('else')
+	mut else_idx := -1
+	for i, branch in node.branches {
+		if branch.is_else {
+			else_idx = i
+			continue
 		}
-		if branch.stmts.len == 0 {
-			f.writeln(' {}')
-		} else {
-			if single_line {
-				f.write(' { ')
-			} else {
-				f.writeln(' {')
-			}
-			f.stmts(branch.stmts)
-			if single_line {
-				f.remove_new_line({})
-				f.writeln(' }')
-			} else {
-				f.writeln('}')
-			}
-		}
-		f.comments(branch.post_comments, inline: true)
+		f.match_branch(branch, single_line)
+	}
+	if else_idx >= 0 {
+		f.match_branch(node.branches[else_idx], single_line)
 	}
 	f.indent--
 	f.write('}')
@@ -2139,11 +2183,16 @@ pub fn (mut f Fmt) or_expr(node ast.OrExpr) {
 }
 
 pub fn (mut f Fmt) par_expr(node ast.ParExpr) {
-	f.write('(')
-	f.par_level++
+	requires_paren := node.expr !is ast.Ident
+	if requires_paren {
+		f.par_level++
+		f.write('(')
+	}
 	f.expr(node.expr)
-	f.par_level--
-	f.write(')')
+	if requires_paren {
+		f.par_level--
+		f.write(')')
+	}
 }
 
 pub fn (mut f Fmt) postfix_expr(node ast.PostfixExpr) {
@@ -2294,12 +2343,19 @@ pub fn (mut f Fmt) string_inter_literal(node ast.StringInterLiteral) {
 	// TODO: this code is very similar to ast.Expr.str()
 	mut quote := "'"
 	for val in node.vals {
-		if val.contains("'") {
+		if val.contains('\\"') {
 			quote = '"'
+			break
+		}
+		if val.contains("\\'") {
+			quote = "'"
+			break
 		}
 		if val.contains('"') {
 			quote = "'"
-			break
+		}
+		if val.contains("'") {
+			quote = '"'
 		}
 	}
 	f.write(quote)

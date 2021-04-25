@@ -26,27 +26,27 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 		p.expecting_type = true // Makes name_expr() parse the type `User` in `json.decode(User, txt)`
 		or_kind = .block
 	}
-	//
+
 	old_expr_mod := p.expr_mod
 	defer {
 		p.expr_mod = old_expr_mod
 	}
 	p.expr_mod = ''
-	//
-	mut generic_types := []ast.Type{}
-	mut generic_list_pos := p.tok.position()
+
+	mut concrete_types := []ast.Type{}
+	mut concrete_list_pos := p.tok.position()
 	if p.tok.kind == .lt {
 		// `foo<int>(10)`
 		p.expr_mod = ''
-		generic_types = p.parse_generic_type_list()
-		generic_list_pos = generic_list_pos.extend(p.prev_tok.position())
+		concrete_types = p.parse_generic_type_list()
+		concrete_list_pos = concrete_list_pos.extend(p.prev_tok.position())
 		// In case of `foo<T>()`
 		// T is unwrapped and registered in the checker.
 		full_generic_fn_name := if fn_name.contains('.') { fn_name } else { p.prepend_mod(fn_name) }
-		has_generic_generic := generic_types.filter(it.has_flag(.generic)).len > 0
+		has_generic_generic := concrete_types.filter(it.has_flag(.generic)).len > 0
 		if !has_generic_generic {
 			// will be added in checker
-			p.table.register_fn_gen_type(full_generic_fn_name, generic_types)
+			p.table.register_fn_generic_types(full_generic_fn_name, concrete_types)
 		}
 	}
 	p.check(.lpar)
@@ -95,8 +95,8 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 		mod: p.mod
 		pos: pos
 		language: language
-		generic_types: generic_types
-		generic_list_pos: generic_list_pos
+		concrete_types: concrete_types
+		concrete_list_pos: concrete_list_pos
 		or_block: ast.OrExpr{
 			stmts: or_stmts
 			kind: or_kind
@@ -177,8 +177,9 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	is_manualfree := p.is_manualfree || p.attrs.contains('manualfree')
 	is_deprecated := p.attrs.contains('deprecated')
 	is_direct_arr := p.attrs.contains('direct_array_access')
-	is_conditional, conditional_ctdefine := p.attrs.has_comptime_define()
+	conditional_ctdefine := p.attrs.find_comptime_define() or { '' }
 	mut is_unsafe := p.attrs.contains('unsafe')
+	is_keep_alive := p.attrs.contains('keep_args_alive')
 	is_pub := p.tok.kind == .key_pub
 	if is_pub {
 		p.next()
@@ -192,6 +193,10 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		language = ast.Language.c
 	} else if p.tok.kind == .name && p.tok.lit == 'JS' {
 		language = ast.Language.js
+	}
+	if is_keep_alive && language != .c {
+		p.error_with_pos('attribute [keep_args_alive] is only supported for C functions',
+			p.tok.position())
 	}
 	if language != .v {
 		p.next()
@@ -216,13 +221,13 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		language = rec.language
 	}
 	mut name := ''
+	name_pos := p.tok.position()
 	if p.tok.kind == .name {
-		pos := p.tok.position()
 		// TODO high order fn
 		name = if language == .js { p.check_js_name() } else { p.check_name() }
 		if language == .v && !p.pref.translated && util.contains_capital(name) && !p.builtin_mod {
 			p.error_with_pos('function names cannot contain uppercase letters, use snake_case instead',
-				pos)
+				name_pos)
 			return ast.FnDecl{
 				scope: 0
 			}
@@ -238,7 +243,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 				}
 			}
 			if is_duplicate {
-				p.error_with_pos('duplicate method `$name`', pos)
+				p.error_with_pos('duplicate method `$name`', name_pos)
 				return ast.FnDecl{
 					scope: 0
 				}
@@ -246,7 +251,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		}
 		// cannot redefine buildin function
 		if !is_method && !p.builtin_mod && name in builtin_functions {
-			p.error_with_pos('cannot redefine builtin function `$name`', pos)
+			p.error_with_pos('cannot redefine builtin function `$name`', name_pos)
 			return ast.FnDecl{
 				scope: 0
 			}
@@ -262,14 +267,19 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		p.error_with_pos('cannot overload `!=`, `>`, `<=` and `>=` as they are auto generated from `==` and`<`',
 			p.tok.position())
 	} else {
-		pos := p.tok.position()
-		p.error_with_pos('expecting method name', pos)
+		p.error_with_pos('expecting method name', p.tok.position())
 		return ast.FnDecl{
 			scope: 0
 		}
 	}
 	// <T>
-	generic_params := p.parse_generic_params()
+	generic_names := p.parse_generic_names()
+	// check generic receiver method has no generic names
+	if is_method && rec.typ.has_flag(.generic) && generic_names.len == 0
+		&& p.table.get_type_symbol(rec.typ).kind != .any {
+		p.error_with_pos('generic receiver method `$name` should add generic names, e.g. $name<T>',
+			name_pos)
+	}
 	// Args
 	args2, are_args_type_only, is_variadic := p.fn_args()
 	params << args2
@@ -293,12 +303,14 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		}
 	}
 	// Return type
+	mut return_type_pos := p.tok.position()
 	mut return_type := ast.void_type
 	// don't confuse token on the next line: fn decl, [attribute]
 	same_line := p.tok.line_nr == p.prev_tok.line_nr
 	if (p.tok.kind.is_start_of_type() && (same_line || p.tok.kind != .lsbr))
 		|| (same_line && p.tok.kind == .key_fn) {
 		return_type = p.parse_type()
+		return_type_pos = return_type_pos.extend(p.prev_tok.position())
 	}
 	mut type_sym_method_idx := 0
 	no_body := p.tok.kind != .lcbr
@@ -331,13 +343,14 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			params: params
 			return_type: return_type
 			is_variadic: is_variadic
-			generic_names: generic_params.map(it.name)
+			generic_names: generic_names
 			is_pub: is_pub
 			is_deprecated: is_deprecated
 			is_unsafe: is_unsafe
 			is_main: is_main
 			is_test: is_test
-			is_conditional: is_conditional
+			is_conditional: conditional_ctdefine != ''
+			is_keep_alive: is_keep_alive
 			ctdefine: conditional_ctdefine
 			no_body: no_body
 			mod: p.mod
@@ -359,13 +372,14 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 			params: params
 			return_type: return_type
 			is_variadic: is_variadic
-			generic_names: generic_params.map(it.name)
+			generic_names: generic_names
 			is_pub: is_pub
 			is_deprecated: is_deprecated
 			is_unsafe: is_unsafe
 			is_main: is_main
 			is_test: is_test
-			is_conditional: is_conditional
+			is_conditional: conditional_ctdefine != ''
+			is_keep_alive: is_keep_alive
 			ctdefine: conditional_ctdefine
 			no_body: no_body
 			mod: p.mod
@@ -398,6 +412,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		mod: p.mod
 		stmts: stmts
 		return_type: return_type
+		return_type_pos: return_type_pos
 		params: params
 		is_manualfree: is_manualfree
 		is_deprecated: is_deprecated
@@ -406,12 +421,13 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		is_variadic: is_variadic
 		is_main: is_main
 		is_test: is_test
-		is_conditional: is_conditional
+		is_conditional: conditional_ctdefine != ''
+		is_keep_alive: is_keep_alive
 		receiver: ast.StructField{
 			name: rec.name
 			typ: rec.typ
 		}
-		generic_params: generic_params
+		generic_names: generic_names
 		receiver_pos: rec.pos
 		is_method: is_method
 		method_type_pos: rec.type_pos
@@ -499,16 +515,17 @@ fn (mut p Parser) fn_receiver(mut params []ast.Param, mut rec ReceiverParsingInf
 		is_mut: rec.is_mut
 		is_auto_rec: is_auto_rec
 		typ: rec.typ
+		type_pos: rec.type_pos
 	}
 	p.check(.rpar)
 
 	return
 }
 
-fn (mut p Parser) parse_generic_params() []ast.GenericParam {
+fn (mut p Parser) parse_generic_names() []string {
 	mut param_names := []string{}
 	if p.tok.kind != .lt {
-		return []ast.GenericParam{}
+		return param_names
 	}
 	p.check(.lt)
 	mut first_done := false
@@ -539,7 +556,7 @@ fn (mut p Parser) parse_generic_params() []ast.GenericParam {
 		count++
 	}
 	p.check(.gt)
-	return param_names.map(ast.GenericParam{it})
+	return param_names
 }
 
 // is_generic_name returns true if the current token is a generic name.
@@ -574,10 +591,12 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 	}
 	mut same_line := p.tok.line_nr == p.prev_tok.line_nr
 	mut return_type := ast.void_type
+	mut return_type_pos := p.tok.position()
 	// lpar: multiple return types
 	if same_line {
 		if p.tok.kind.is_start_of_type() {
 			return_type = p.parse_type()
+			return_type_pos = return_type_pos.extend(p.tok.position())
 		} else if p.tok.kind != .lcbr {
 			p.error_with_pos('expected return type, not $p.tok for anonymous function',
 				p.tok.position())
@@ -618,6 +637,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 			mod: p.mod
 			stmts: stmts
 			return_type: return_type
+			return_type_pos: return_type_pos
 			params: args
 			is_variadic: is_variadic
 			is_method: false
@@ -824,7 +844,8 @@ fn (mut p Parser) fn_args() ([]ast.Param, bool, bool) {
 
 fn (mut p Parser) check_fn_mutable_arguments(typ ast.Type, pos token.Position) {
 	sym := p.table.get_type_symbol(typ)
-	if sym.kind in [.array, .array_fixed, .interface_, .map, .placeholder, .struct_, .sum_type] {
+	if sym.kind in [.array, .array_fixed, .interface_, .map, .placeholder, .struct_,
+		.generic_struct_inst, .sum_type] {
 		return
 	}
 	if typ.is_ptr() || typ.is_pointer() {

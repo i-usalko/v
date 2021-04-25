@@ -50,7 +50,7 @@ pub fn vhash() string {
 	buf[0] = 0
 	unsafe {
 		bp := &buf[0]
-		C.snprintf(charptr(bp), 50, '%s', C.V_COMMIT_HASH)
+		C.snprintf(&char(bp), 50, c'%s', C.V_COMMIT_HASH)
 		return tos_clone(bp)
 	}
 }
@@ -119,7 +119,7 @@ pub fn githash(should_get_from_filesystem bool) string {
 	buf[0] = 0
 	unsafe {
 		bp := &buf[0]
-		C.snprintf(charptr(bp), 50, '%s', C.V_CURRENT_COMMIT_HASH)
+		C.snprintf(&char(bp), 50, c'%s', C.V_CURRENT_COMMIT_HASH)
 		return tos_clone(bp)
 	}
 }
@@ -134,15 +134,15 @@ pub fn set_vroot_folder(vroot_path string) {
 	os.setenv('VCHILD', 'true', true)
 }
 
-pub fn resolve_vroot(str string, dir string) ?string {
+pub fn resolve_vmodroot(str string, dir string) ?string {
 	mut mcache := vmod.get_cache()
 	vmod_file_location := mcache.get_by_folder(dir)
 	if vmod_file_location.vmod_file.len == 0 {
 		// There was no actual v.mod file found.
-		return error('To use @VROOT, you need to have a "v.mod" file in $dir, or in one of its parent folders.')
+		return error('To use @VMODROOT, you need to have a "v.mod" file in $dir, or in one of its parent folders.')
 	}
 	vmod_path := vmod_file_location.vmod_folder
-	return str.replace('@VROOT', os.real_path(vmod_path))
+	return str.replace('@VMODROOT', os.real_path(vmod_path))
 }
 
 // resolve_env_value replaces all occurrences of `$env('ENV_VAR_NAME')`
@@ -215,13 +215,12 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 		tool_exe = path_of_executable(tool_basename)
 		tool_source = tool_basename + '.v'
 	}
-	tool_command := '"$tool_exe" $tool_args'
 	if is_verbose {
 		println('launch_tool vexe        : $vroot')
 		println('launch_tool vroot       : $vroot')
-		println('launch_tool tool_args   : $tool_args')
 		println('launch_tool tool_source : $tool_source')
-		println('launch_tool tool_command: $tool_command')
+		println('launch_tool tool_exe    : $tool_exe')
+		println('launch_tool tool_args   : $tool_args')
 	}
 	disabling_file := recompilation.disabling_file(vroot)
 	is_recompilation_disabled := os.exists(disabling_file)
@@ -254,10 +253,11 @@ pub fn launch_tool(is_verbose bool, tool_name string, args []string) {
 			exit(1)
 		}
 	}
-	if is_verbose {
-		println('launch_tool running tool command: $tool_command ...')
+	$if windows {
+		exit(os.system('"$tool_exe" $tool_args'))
+	} $else {
+		os.execvp(tool_exe, args) or { panic(err) }
 	}
-	exit(os.system(tool_command))
 }
 
 // NB: should_recompile_tool/4 compares unix timestamps that have 1 second resolution

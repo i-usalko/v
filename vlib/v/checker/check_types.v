@@ -34,8 +34,10 @@ pub fn (mut c Checker) check_expected_call_arg(got ast.Type, expected_ ast.Type,
 			&& got.idx() in [ast.int_type_idx, ast.int_literal_type_idx]) {
 			return
 		}
+		// allow `C.printf('foo')` instead of `C.printf(c'foo')`
 		if got.idx() == ast.string_type_idx
-			&& expected in [ast.byteptr_type_idx, ast.charptr_type_idx] {
+			&& (expected in [ast.byteptr_type_idx, ast.charptr_type_idx]
+			|| (expected.idx() == ast.char_type_idx && expected.is_ptr())) {
 			return
 		}
 		exp_sym := c.table.get_type_symbol(expected)
@@ -49,6 +51,41 @@ pub fn (mut c Checker) check_expected_call_arg(got ast.Type, expected_ ast.Type,
 	}
 	if c.check_types(got, expected) {
 		return
+	}
+	idx_got := got.idx()
+	idx_expected := expected.idx()
+	if idx_got in [ast.byteptr_type_idx, ast.charptr_type_idx]
+		|| idx_expected in [ast.byteptr_type_idx, ast.charptr_type_idx] {
+		igot := int(got)
+		iexpected := int(expected)
+		// TODO: remove; transitional compatibility for byteptr === &byte
+		if (igot == ast.byteptr_type_idx && iexpected == 65545)
+			|| (iexpected == ast.byteptr_type_idx && igot == 65545) {
+			return
+		}
+		// TODO: remove; transitional compatibility for charptr === &char
+		if (igot == ast.charptr_type_idx && iexpected == 65551)
+			|| (iexpected == ast.charptr_type_idx && igot == 65551) {
+			return
+		}
+		muls_got := got.nr_muls()
+		muls_expected := expected.nr_muls()
+		if idx_got == ast.byteptr_type_idx && idx_expected == ast.byte_type_idx
+			&& muls_got + 1 == muls_expected {
+			return
+		}
+		if idx_expected == ast.byteptr_type_idx && idx_got == ast.byte_type_idx
+			&& muls_expected + 1 == muls_got {
+			return
+		}
+		if idx_got == ast.charptr_type_idx && idx_expected == ast.char_type_idx
+			&& muls_got + 1 == muls_expected {
+			return
+		}
+		if idx_expected == ast.charptr_type_idx && idx_got == ast.char_type_idx
+			&& muls_expected + 1 == muls_got {
+			return
+		}
 	}
 	return error('cannot use `${c.table.type_to_str(got.clear_flag(.variadic))}` as `${c.table.type_to_str(expected.clear_flag(.variadic))}`')
 }
@@ -102,6 +139,15 @@ pub fn (mut c Checker) check_basic(got ast.Type, expected ast.Type) bool {
 	if got == ast.error_type_idx && expected == ast.string_type_idx {
 		return true
 	}
+	// allow `return 0` in a function with `?int` return type
+	expected_nonflagged := expected.clear_flags()
+	if got == ast.int_literal_type && expected_nonflagged.is_int() {
+		return true
+	}
+	// allow `return 0` in a function with `?f32` return type
+	if got == ast.float_literal_type && expected_nonflagged.is_float() {
+		return true
+	}
 	return false
 }
 
@@ -125,7 +171,7 @@ pub fn (mut c Checker) check_matching_function_symbols(got_type_sym &ast.TypeSym
 		if exp_arg_is_ptr != got_arg_is_ptr {
 			exp_arg_pointedness := if exp_arg_is_ptr { 'a pointer' } else { 'NOT a pointer' }
 			got_arg_pointedness := if got_arg_is_ptr { 'a pointer' } else { 'NOT a pointer' }
-			c.add_error_detail("`$exp_fn.name`\'s expected fn argument: `$exp_arg.name` is $exp_arg_pointedness, but the passed fn argument: `$got_arg.name` is $got_arg_pointedness")
+			c.add_error_detail('`$exp_fn.name`\'s expected fn argument: `$exp_arg.name` is $exp_arg_pointedness, but the passed fn argument: `$got_arg.name` is $got_arg_pointedness')
 			return false
 		}
 		if !c.check_basic(got_arg.typ, exp_arg.typ) {
@@ -157,7 +203,7 @@ fn (mut c Checker) check_shift(left_type ast.Type, right_type ast.Type, left_pos
 	return left_type
 }
 
-pub fn (c &Checker) promote(left_type ast.Type, right_type ast.Type) ast.Type {
+pub fn (mut c Checker) promote(left_type ast.Type, right_type ast.Type) ast.Type {
 	if left_type.is_ptr() || left_type.is_pointer() {
 		if right_type.is_int() {
 			return left_type
@@ -241,7 +287,8 @@ pub fn (mut c Checker) check_types(got ast.Type, expected ast.Type) bool {
 	if exp_idx == got_idx {
 		return true
 	}
-	if exp_idx == ast.voidptr_type_idx || exp_idx == ast.byteptr_type_idx {
+	if exp_idx == ast.voidptr_type_idx || exp_idx == ast.byteptr_type_idx
+		|| (expected.is_ptr() && expected.deref().idx() == ast.byte_type_idx) {
 		if got.is_ptr() || got.is_pointer() {
 			return true
 		}
@@ -253,7 +300,8 @@ pub fn (mut c Checker) check_types(got ast.Type, expected ast.Type) bool {
 			return true
 		}
 	}
-	if got_idx == ast.voidptr_type_idx || got_idx == ast.byteptr_type_idx {
+	if got_idx == ast.voidptr_type_idx || got_idx == ast.byteptr_type_idx
+		|| (got_idx == ast.byte_type_idx && got.is_ptr()) {
 		if expected.is_ptr() || expected.is_pointer() {
 			return true
 		}
@@ -312,7 +360,7 @@ pub fn (mut c Checker) symmetric_check(left ast.Type, right ast.Type) bool {
 	return c.check_basic(left, right)
 }
 
-pub fn (c &Checker) get_default_fmt(ftyp ast.Type, typ ast.Type) byte {
+pub fn (mut c Checker) get_default_fmt(ftyp ast.Type, typ ast.Type) byte {
 	if ftyp.has_flag(.optional) {
 		return `s`
 	} else if typ.is_float() {
@@ -427,17 +475,29 @@ pub fn (mut c Checker) string_inter_lit(mut node ast.StringInterLiteral) ast.Typ
 	return ast.string_type
 }
 
-pub fn (mut c Checker) infer_fn_types(f ast.Fn, mut call_expr ast.CallExpr) {
+pub fn (mut c Checker) infer_fn_generic_types(f ast.Fn, mut call_expr ast.CallExpr) {
 	mut inferred_types := []ast.Type{}
 	for gi, gt_name in f.generic_names {
 		// skip known types
-		if gi < call_expr.generic_types.len {
-			inferred_types << call_expr.generic_types[gi]
+		if gi < call_expr.concrete_types.len {
+			inferred_types << call_expr.concrete_types[gi]
 			continue
 		}
 		mut typ := ast.void_type
 		for i, param in f.params {
 			mut to_set := ast.void_type
+			// resolve generic struct receiver
+			if i == 0 && call_expr.is_method && param.typ.has_flag(.generic) {
+				sym := c.table.get_type_symbol(call_expr.receiver_type)
+				if sym.kind == .struct_ {
+					info := sym.info as ast.Struct
+					receiver_generic_names := info.generic_types.map(c.table.get_type_symbol(it).name)
+					if gt_name in receiver_generic_names {
+						idx := receiver_generic_names.index(gt_name)
+						typ = info.concrete_types[idx]
+					}
+				}
+			}
 			arg_i := if i != 0 && call_expr.is_method { i - 1 } else { i }
 			if call_expr.args.len <= arg_i {
 				break
@@ -449,6 +509,10 @@ pub fn (mut c Checker) infer_fn_types(f ast.Fn, mut call_expr ast.CallExpr) {
 				to_set = c.table.mktyp(arg.typ)
 				if arg.expr.is_auto_deref_var() {
 					to_set = to_set.deref()
+				}
+				// resolve &T &&T ...
+				if param.typ.nr_muls() > 0 && to_set.nr_muls() > 0 {
+					to_set = to_set.set_nr_muls(0)
 				}
 				// If the parent fn param is a generic too
 				if to_set.has_flag(.generic) {
@@ -463,7 +527,7 @@ pub fn (mut c Checker) infer_fn_types(f ast.Fn, mut call_expr ast.CallExpr) {
 					mut param_elem_sym := c.table.get_type_symbol(param_elem_info.elem_type)
 					for {
 						if arg_elem_sym.kind == .array && param_elem_sym.kind == .array
-							&& c.cur_fn.generic_params.filter(it.name == param_elem_sym.name).len == 0 {
+							&& param_elem_sym.name !in c.cur_fn.generic_names {
 							arg_elem_info = arg_elem_sym.info as ast.Array
 							arg_elem_sym = c.table.get_type_symbol(arg_elem_info.elem_type)
 							param_elem_info = param_elem_sym.info as ast.Array
@@ -489,7 +553,7 @@ pub fn (mut c Checker) infer_fn_types(f ast.Fn, mut call_expr ast.CallExpr) {
 						}
 					}
 					if !c.check_types(typ, to_set) {
-						c.error('inferred generic type `$gt_name` is ambigous got `${c.table.get_type_symbol(to_set).name}`, expected `${c.table.get_type_symbol(typ).name}`',
+						c.error('inferred generic type `$gt_name` is ambiguous: got `${c.table.get_type_symbol(to_set).name}`, expected `${c.table.get_type_symbol(typ).name}`',
 							arg.pos)
 					}
 				}
@@ -505,7 +569,7 @@ pub fn (mut c Checker) infer_fn_types(f ast.Fn, mut call_expr ast.CallExpr) {
 			println('inferred `$f.name<$s>`')
 		}
 		inferred_types << typ
-		call_expr.generic_types << typ
+		call_expr.concrete_types << typ
 	}
-	c.table.register_fn_gen_type(f.name, inferred_types)
+	c.table.register_fn_generic_types(f.name, inferred_types)
 }

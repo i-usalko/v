@@ -19,6 +19,42 @@ enum State {
 	// span // span.{
 }
 
+// check HTML open tag `<name attr="x" >`
+fn is_html_open_tag(name string, s string) bool {
+	mut len := s.len
+	if len < name.len {
+		return false
+	}
+	mut sub := s[0..1]
+	if sub != '<' { // not start with '<'
+		return false
+	}
+	sub = s[len - 1..len]
+	if sub != '>' { // not end with '<'
+		return false
+	}
+	sub = s[len - 2..len - 1]
+	if sub == '/' { // self-closing
+		return false
+	}
+	sub = s[1..len - 1]
+	if sub.contains_any('<>') { // `<name <bad> >`
+		return false
+	}
+	if sub == name { // `<name>`
+		return true
+	} else {
+		len = name.len
+		if sub.len <= len { // `<nam>` or `<meme>`
+			return false
+		}
+		if sub[..len + 1] != '$name ' { // not `<name ...>`
+			return false
+		}
+		return true
+	}
+}
+
 // compile_file compiles the content of a file by the given path as a template
 pub fn (mut p Parser) compile_template_file(template_file string, fn_name string) string {
 	mut lines := os.read_lines(template_file) or {
@@ -50,11 +86,11 @@ mut sb := strings.new_builder($lstartlength)\n
 			eprintln('>>> tfile: $template_file, spos: ${start_of_line_pos:6}, epos:${end_of_line_pos:6}, fi: ${tline_number:5}, i: ${i:5}, line: $oline')
 		}
 		line := oline.trim_space()
-		if line == '<style>' {
+		if is_html_open_tag('style', line) {
 			state = .css
 		} else if line == '</style>' {
 			state = .html
-		} else if line == '<script>' {
+		} else if is_html_open_tag('script', line) {
 			state = .js
 		} else if line == '</script>' {
 			state = .html
@@ -178,11 +214,19 @@ mut sb := strings.new_builder($lstartlength)\n
 			} else {
 				source.writeln('</div>')
 			}
+		} else if state == .js {
+			// replace `$` to `\$` at first to escape JavaScript template literal syntax
+			source.writeln(line.replace(r'$', r'\$').replace(r'$$', r'@').replace(r'.$',
+				r'.@').replace(r"'", r"\'"))
+		} else if state == .css {
+			// disable template variable declaration in inline stylesheet
+			// because of  some CSS rules prefixed with `@`.
+			source.writeln(line.replace(r'.$', r'.@').replace(r"'", r"\'"))
 		} else {
 			// HTML, may include `@var`
 			// escaped by cgen, unless it's a `vweb.RawHtml` string
-			source.writeln(line.replace('@', '$').replace('$$', '@').replace('.$', '.@').replace("'",
-				"\\'"))
+			source.writeln(line.replace(r'@', r'$').replace(r'$$', r'@').replace(r'.$',
+				r'.@').replace(r"'", r"\'"))
 		}
 	}
 	source.writeln(parser.tmpl_str_end)

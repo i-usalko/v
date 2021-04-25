@@ -148,7 +148,7 @@ fn new_gen_vc(flag_options FlagOptions) &GenVC {
 }
 
 // WebhookServer init
-pub fn (mut ws WebhookServer) init_once() {
+pub fn (mut ws WebhookServer) init_server() {
 	mut fp := flag.new_flag_parser(os.args.clone())
 	flag_options := parse_flags(mut fp)
 	ws.gen_vc = new_gen_vc(flag_options)
@@ -156,9 +156,11 @@ pub fn (mut ws WebhookServer) init_once() {
 	// ws.gen_vc = new_gen_vc(flag_options)
 }
 
+/*
 pub fn (mut ws WebhookServer) init() {
 	// ws.init_once()
 }
+*/
 
 pub fn (mut ws WebhookServer) index() {
 	eprintln('WebhookServer.index() called')
@@ -276,9 +278,8 @@ fn (mut gen_vc GenVC) generate() {
 	gen_vc.assert_file_exists_and_is_not_too_short(v_exec, err_msg_make)
 	// build v.c for each os
 	for os_name in vc_build_oses {
-		vc_suffix := if os_name == 'nix' { '' } else { '_${os_name[..3]}' }
+		c_file := if os_name == 'nix' { 'v.c' } else { 'v_win.c' }
 		v_flags := if os_name == 'nix' { '-os cross' } else { '-os $os_name' }
-		c_file := 'v${vc_suffix}.c'
 		// try generate .c file
 		gen_vc.cmd_exec('$v_exec $v_flags -o $c_file $git_repo_dir_v/cmd/v')
 		// check if the c file seems ok

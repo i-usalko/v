@@ -74,6 +74,7 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 			args_var: s
 			is_env: true
 			env_pos: spos
+			pos: spos.extend(p.prev_tok.position())
 		}
 	}
 	p.check(.lpar)
@@ -121,6 +122,7 @@ fn (mut p Parser) comp_call() ast.ComptimeCall {
 				rpath: literal_string_param
 				apath: epath
 			}
+			pos: start_pos.extend(p.prev_tok.position())
 		}
 	}
 	// Compile vweb html template to V code, parse that V code and embed the resulting V function
@@ -277,12 +279,15 @@ fn (mut p Parser) at() ast.AtExpr {
 		'@METHOD' { token.AtKind.method_name }
 		'@MOD' { token.AtKind.mod_name }
 		'@STRUCT' { token.AtKind.struct_name }
-		'@VEXE' { token.AtKind.vexe_path }
 		'@FILE' { token.AtKind.file_path }
 		'@LINE' { token.AtKind.line_nr }
 		'@COLUMN' { token.AtKind.column_nr }
 		'@VHASH' { token.AtKind.vhash }
 		'@VMOD_FILE' { token.AtKind.vmod_file }
+		'@VEXE' { token.AtKind.vexe_path }
+		'@VEXEROOT' { token.AtKind.vexeroot_path }
+		'@VMODROOT' { token.AtKind.vmodroot_path }
+		'@VROOT' { token.AtKind.vroot_path } // deprecated, use @VEXEROOT or @VMODROOT
 		else { token.AtKind.unknown }
 	}
 	p.next()

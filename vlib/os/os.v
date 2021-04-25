@@ -3,13 +3,6 @@
 // that can be found in the LICENSE file.
 module os
 
-pub struct Result {
-pub:
-	exit_code int
-	output    string
-	// stderr string // TODO
-}
-
 pub const (
 	args          = []string{}
 	max_path_len  = 4096
@@ -22,6 +15,18 @@ const (
 	w_ok = 2
 	r_ok = 4
 )
+
+pub struct Result {
+pub:
+	exit_code int
+	output    string
+	// stderr string // TODO
+}
+
+[unsafe]
+pub fn (mut result Result) free() {
+	unsafe { result.output.free() }
+}
 
 // cp_all will recursively copy `src` to `dst`,
 // optionally overwriting files or dirs in `dst`.
@@ -623,4 +628,16 @@ pub fn execute_or_panic(cmd string) Result {
 		panic(res.output)
 	}
 	return res
+}
+
+// is_atty returns 1 if the `fd` file descriptor is open and refers to a terminal
+pub fn is_atty(fd int) int {
+	$if windows {
+		mut mode := u32(0)
+		osfh := voidptr(C._get_osfhandle(fd))
+		C.GetConsoleMode(osfh, voidptr(&mode))
+		return int(mode)
+	} $else {
+		return C.isatty(fd)
+	}
 }

@@ -21,6 +21,8 @@ mut:
 	out_name_c    string
 	out_name_js   string
 	max_nr_errors int = 100
+	stats_lines   int // size of backend generated source code in lines
+	stats_bytes   int // size of backend generated source code in bytes
 pub mut:
 	module_search_paths []string
 	parsed_files        []ast.File
@@ -114,9 +116,13 @@ pub fn (mut b Builder) parse_imports() {
 			// Add all imports referenced by these libs
 			parsed_files := parser.parse_files(v_files, b.table, b.pref, b.global_scope)
 			for file in parsed_files {
-				if file.mod.name != mod {
+				mut name := file.mod.name
+				if name == '' {
+					name = file.mod.short_name
+				}
+				if name != mod {
 					// v.parsers[pidx].error_with_token_index('bad module definition: ${v.parsers[pidx].file_path} imports module "$mod" but $file is defined as module `$p_mod`', 1
-					error_with_pos('bad module definition: $ast_file.path imports module "$mod" but $file.path is defined as module `$file.mod.name`',
+					error_with_pos('bad module definition: $ast_file.path imports module "$mod" but $file.path is defined as module `$name`',
 						ast_file.path, imp.pos)
 				}
 			}
@@ -283,6 +289,9 @@ pub fn (b &Builder) find_module_path(mod string, fpath string) ?string {
 }
 
 fn (b &Builder) show_total_warns_and_errors_stats() {
+	if b.checker.nr_errors == 0 && b.checker.nr_warnings == 0 && b.checker.nr_notices == 0 {
+		return
+	}
 	if b.pref.is_stats {
 		estring := util.bold(b.checker.nr_errors.str())
 		wstring := util.bold(b.checker.nr_warnings.str())

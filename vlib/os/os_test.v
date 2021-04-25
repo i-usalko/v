@@ -522,7 +522,7 @@ fn test_posix_set_bit() {
 		fpath := '/tmp/permtest'
 		create(fpath) or { panic("Couldn't create file") }
 		chmod(fpath, 0o7777)
-		c_fpath := charptr(fpath.str)
+		c_fpath := &char(fpath.str)
 		mut s := C.stat{}
 		unsafe {
 			C.stat(c_fpath, &s)
@@ -572,4 +572,21 @@ fn test_exists_in_system_path() {
 		return
 	}
 	assert os.exists_in_system_path('ls')
+}
+
+fn test_truncate() {
+	filename := './test_trunc.txt'
+	hello := 'hello world!'
+	mut f := os.create(filename) or { panic(err) }
+	f.write_string(hello) or { panic(err) }
+	f.close()
+	assert hello.len == os.file_size(filename)
+	newlen := u64(40000)
+	os.truncate(filename, newlen) or { panic(err) }
+	assert newlen == os.file_size(filename)
+	os.rm(filename) or { panic(err) }
+}
+
+fn test_hostname() {
+	assert os.hostname().len > 2
 }

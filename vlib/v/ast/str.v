@@ -62,11 +62,11 @@ pub fn (node &FnDecl) stringify(t &Table, cur_mod string, m2a map[string]string)
 	if name in ['+', '-', '*', '/', '%', '<', '>', '==', '!=', '>=', '<='] {
 		f.write_string(' ')
 	}
-	if node.generic_params.len > 0 {
+	if node.generic_names.len > 0 {
 		f.write_string('<')
-		for i, param in node.generic_params {
-			is_last := i == node.generic_params.len - 1
-			f.write_string(param.name)
+		for i, gname in node.generic_names {
+			is_last := i == node.generic_names.len - 1
+			f.write_string(gname)
 			if !is_last {
 				f.write_string(', ')
 			}
@@ -140,6 +140,10 @@ pub fn (lit &StringInterLiteral) get_fspec_braces(i int) (string, bool) {
 		|| (lit.fills[i] && lit.fwidths[i] >= 0) || lit.fwidths[i] != 0
 		|| lit.precisions[i] != 987698
 	mut needs_braces := needs_fspec
+	sx := lit.exprs[i].str()
+	if sx.contains(r'"') || sx.contains(r"'") {
+		needs_braces = true
+	}
 	if !needs_braces {
 		if i + 1 < lit.vals.len && lit.vals[i + 1].len > 0 {
 			next_char := lit.vals[i + 1][0]
@@ -274,6 +278,9 @@ pub fn (x Expr) str() string {
 		ComptimeSelector {
 			return '${x.left}.$$x.field_expr'
 		}
+		ConcatExpr {
+			return x.vals.map(it.str()).join(',')
+		}
 		EnumVal {
 			return '.$x.val'
 		}
@@ -282,6 +289,23 @@ pub fn (x Expr) str() string {
 		}
 		Ident {
 			return x.name
+		}
+		IfExpr {
+			mut parts := []string{}
+			dollar := if x.is_comptime { '$' } else { '' }
+			for i, branch in x.branches {
+				if i != 0 {
+					parts << ' } ${dollar}else '
+				}
+				if i < x.branches.len - 1 || !x.has_else {
+					parts << ' ${dollar}if ' + branch.cond.str() + ' { '
+				}
+				for stmt in branch.stmts {
+					parts << stmt.str()
+				}
+			}
+			parts << ' }'
+			return parts.join('')
 		}
 		IndexExpr {
 			return '$x.left.str()[$x.index.str()]'

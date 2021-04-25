@@ -25,7 +25,7 @@ fn test_inline_asm() {
 		mov f, d
 		add f, e
 		add f, 5
-		; +r (f) // output 
+		; +r (f) // output
 		; r (d)
 		  r (e) // input
 	}
@@ -95,4 +95,33 @@ fn test_inline_asm() {
 		  r (n.data) as in_data
 	}
 	assert n == [7, 11, 2, 6]
+
+	mut manu := Manu{}
+	asm amd64 {
+		mov eax, 0
+		cpuid
+		; =b (manu.ebx) as ebx0
+		  =d (manu.edx) as edx0
+		  =c (manu.ecx) as ecx0
+	}
+	manu.str()
+}
+
+[packed]
+struct Manu {
+mut:
+	ebx  u32
+	edx  u32
+	ecx  u32
+	zero byte // for string
+}
+
+fn (m Manu) str() string {
+	return unsafe {
+		string{
+			str: &byte(&m)
+			len: 24
+			is_lit: 1
+		}
+	}
 }

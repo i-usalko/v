@@ -96,7 +96,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 	mut is_field_mut := false
 	mut is_field_pub := false
 	mut is_field_global := false
-	mut last_line := -1
+	mut last_line := p.prev_tok.position().line_nr + 1
 	mut end_comments := []ast.Comment{}
 	if !no_body {
 		p.check(.lcbr)
@@ -178,7 +178,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 			field_start_pos := p.tok.position()
 			is_embed := ((p.tok.lit.len > 1 && p.tok.lit[0].is_capital())
 				|| p.peek_tok.kind == .dot) && language == .v && p.peek_tok.kind != .key_fn
-			is_on_top := ast_fields.len == 0 && !(is_field_mut || is_field_mut || is_field_global)
+			is_on_top := ast_fields.len == 0 && !(is_field_mut || is_field_global)
 			mut field_name := ''
 			mut typ := ast.Type(0)
 			mut type_pos := token.Position{}
@@ -299,6 +299,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 			is_typedef: attrs.contains('typedef')
 			is_union: is_union
 			is_heap: attrs.contains('heap')
+			is_generic: generic_types.len > 0
 			generic_types: generic_types
 			attrs: attrs
 		}
@@ -332,7 +333,7 @@ fn (mut p Parser) struct_decl() ast.StructDecl {
 		is_union: is_union
 		attrs: attrs
 		end_comments: end_comments
-		gen_types: generic_types
+		generic_types: generic_types
 		embeds: embeds
 	}
 }
@@ -425,7 +426,7 @@ fn (mut p Parser) struct_init(short_syntax bool) ast.StructInit {
 		update_expr_comments: update_expr_comments
 		has_update_expr: has_update_expr
 		name_pos: first_pos
-		pos: first_pos.extend(p.prev_tok.position())
+		pos: first_pos.extend(if short_syntax { p.tok.position() } else { p.prev_tok.position() })
 		is_short: no_keys
 		pre_comments: pre_comments
 	}
@@ -518,7 +519,10 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 				scope: p.scope
 			}
 			if p.tok.kind.is_start_of_type() && p.tok.line_nr == line_nr {
+				method.return_type_pos = p.tok.position()
 				method.return_type = p.parse_type()
+				method.return_type_pos = method.return_type_pos.extend(p.tok.position())
+				method.pos = method.pos.extend(method.return_type_pos)
 			}
 			mcomments := p.eat_comments(same_line: true)
 			mnext_comments := p.eat_comments({})
@@ -568,7 +572,7 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 	ts.info = info
 	p.top_level_statement_end()
 	p.check(.rcbr)
-	pos.update_last_line(p.prev_tok.line_nr)
+	pos = pos.extend_with_last_line(p.prev_tok.position(), p.prev_tok.line_nr)
 	return ast.InterfaceDecl{
 		name: interface_name
 		fields: fields
@@ -577,5 +581,6 @@ fn (mut p Parser) interface_decl() ast.InterfaceDecl {
 		pos: pos
 		pre_comments: pre_comments
 		mut_pos: mut_pos
+		name_pos: name_pos
 	}
 }

@@ -54,8 +54,10 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 			w.asm_io(node.input)
 		}
 		ast.AssertStmt {
-			w.expr(node.expr)
-			w.n_asserts++
+			if node.is_used {
+				w.expr(node.expr)
+				w.n_asserts++
+			}
 		}
 		ast.AssignStmt {
 			w.exprs(node.left)
@@ -89,9 +91,6 @@ pub fn (mut w Walker) stmt(node ast.Stmt) {
 		ast.ForStmt {
 			w.expr(node.cond)
 			w.stmts(node.stmts)
-		}
-		ast.GoStmt {
-			w.expr(node.call_expr)
 		}
 		ast.Return {
 			w.exprs(node.exprs)
@@ -197,9 +196,11 @@ fn (mut w Walker) expr(node ast.Expr) {
 		}
 		ast.DumpExpr {
 			w.expr(node.expr)
+			w.fn_by_name('eprint')
+			w.fn_by_name('eprintln')
 		}
 		ast.GoExpr {
-			w.expr(node.go_stmt.call_expr)
+			w.expr(node.call_expr)
 		}
 		ast.IndexExpr {
 			w.expr(node.left)
@@ -210,6 +211,15 @@ fn (mut w Walker) expr(node ast.Expr) {
 			w.expr(node.left)
 			w.expr(node.right)
 			w.or_block(node.or_block)
+			if node.left_type == 0 {
+				return
+			}
+			sym := w.table.get_type_symbol(node.left_type)
+			if sym.kind == .struct_ {
+				if opmethod := sym.find_method(node.op.str()) {
+					w.fn_decl(mut &ast.FnDecl(opmethod.source_fn))
+				}
+			}
 		}
 		ast.IfGuardExpr {
 			w.expr(node.expr)
