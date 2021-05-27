@@ -32,6 +32,7 @@ mut:
 	methods  map[string][]ast.FnDecl
 }
 
+[heap]
 struct JsGen {
 	table &ast.Table
 	pref  &pref.Preferences
@@ -41,7 +42,7 @@ mut:
 	namespaces          map[string]&Namespace
 	doc                 &JsDoc
 	enable_doc          bool
-	file                ast.File
+	file                &ast.File
 	tmp_count           int
 	inside_ternary      bool
 	inside_loop         bool
@@ -61,7 +62,7 @@ mut:
 	call_stack          []ast.CallExpr
 }
 
-pub fn gen(files []ast.File, table &ast.Table, pref &pref.Preferences) string {
+pub fn gen(files []&ast.File, table &ast.Table, pref &pref.Preferences) string {
 	mut g := &JsGen{
 		definitions: strings.new_builder(100)
 		table: table
@@ -71,6 +72,7 @@ pub fn gen(files []ast.File, table &ast.Table, pref &pref.Preferences) string {
 		doc: 0
 		ns: 0
 		enable_doc: true
+		file: 0
 	}
 	g.doc = new_jsdoc(g)
 	// TODO: Add '[-no]-jsdoc' flag
@@ -387,7 +389,7 @@ fn (mut g JsGen) stmt(node ast.Stmt) {
 			g.gen_expr_stmt(node)
 		}
 		ast.FnDecl {
-			g.fn_decl = &node
+			g.fn_decl = unsafe { &node }
 			g.gen_fn_decl(node)
 		}
 		ast.ForCStmt {
@@ -772,7 +774,8 @@ fn (mut g JsGen) gen_enum_decl(it ast.EnumDecl) {
 			e := field.expr as ast.IntegerLiteral
 			i = e.val.int()
 		}
-		g.writeln('${i++},')
+		g.writeln('$i,')
+		i++
 	}
 	g.dec_indent()
 	g.writeln('};')
@@ -813,7 +816,9 @@ fn fn_has_go(node ast.FnDecl) bool {
 }
 
 fn (mut g JsGen) gen_method_decl(it ast.FnDecl) {
-	g.fn_decl = &it
+	unsafe {
+		g.fn_decl = &it
+	}
 	has_go := fn_has_go(it)
 	is_main := it.name == 'main.main'
 	g.gen_attrs(it.attrs)
@@ -1083,6 +1088,10 @@ fn (mut g JsGen) gen_struct_decl(node ast.StructDecl) {
 	g.writeln('};')
 	g.writeln('${js_name}.prototype = {')
 	g.inc_indent()
+	for embed in node.embeds {
+		etyp := g.typ(embed.typ)
+		g.writeln('...${etyp}.prototype,')
+	}
 	fns := g.method_fn_decls[name]
 	for field in node.fields {
 		typ := g.typ(field.typ)

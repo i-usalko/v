@@ -62,16 +62,28 @@ pub fn (node &FnDecl) stringify(t &Table, cur_mod string, m2a map[string]string)
 	if name in ['+', '-', '*', '/', '%', '<', '>', '==', '!=', '>=', '<='] {
 		f.write_string(' ')
 	}
+	mut add_para_types := true
 	if node.generic_names.len > 0 {
-		f.write_string('<')
-		for i, gname in node.generic_names {
-			is_last := i == node.generic_names.len - 1
-			f.write_string(gname)
-			if !is_last {
-				f.write_string(', ')
+		if node.is_method {
+			sym := t.get_type_symbol(node.params[0].typ)
+			if sym.info is Struct {
+				generic_names := sym.info.generic_types.map(t.get_type_symbol(it).name)
+				if generic_names == node.generic_names {
+					add_para_types = false
+				}
 			}
 		}
-		f.write_string('>')
+		if add_para_types {
+			f.write_string('<')
+			for i, gname in node.generic_names {
+				is_last := i == node.generic_names.len - 1
+				f.write_string(gname)
+				if !is_last {
+					f.write_string(', ')
+				}
+			}
+			f.write_string('>')
+		}
 	}
 	f.write_string('(')
 	for i, arg in node.params {
@@ -168,7 +180,7 @@ pub fn (lit &StringInterLiteral) get_fspec_braces(i int) (string, bool) {
 					} else if sub_expr.left is CallExpr {
 						sub_expr = sub_expr.left
 						continue
-					} else if sub_expr.left is CastExpr {
+					} else if sub_expr.left is CastExpr || sub_expr.left is IndexExpr {
 						needs_braces = true
 					}
 					break
@@ -350,26 +362,26 @@ pub fn (x Expr) str() string {
 			return '__offsetof($x.struct_type, $x.field)'
 		}
 		StringInterLiteral {
-			mut res := []string{}
-			res << "'"
+			mut res := strings.new_builder(50)
+			res.write_string("'")
 			for i, val in x.vals {
-				res << val
+				res.write_string(val)
 				if i >= x.exprs.len {
 					break
 				}
-				res << '$'
+				res.write_string('$')
 				fspec_str, needs_braces := x.get_fspec_braces(i)
 				if needs_braces {
-					res << '{'
-					res << x.exprs[i].str()
-					res << fspec_str
-					res << '}'
+					res.write_string('{')
+					res.write_string(x.exprs[i].str())
+					res.write_string(fspec_str)
+					res.write_string('}')
 				} else {
-					res << x.exprs[i].str()
+					res.write_string(x.exprs[i].str())
 				}
 			}
-			res << "'"
-			return res.join('')
+			res.write_string("'")
+			return res.str()
 		}
 		StringLiteral {
 			return "'$x.val'"
@@ -481,12 +493,14 @@ pub fn (node Stmt) str() string {
 }
 
 fn field_to_string(f ConstField) string {
-	return '${f.name.trim_prefix(f.mod + '.')} = $f.expr'
+	x := f.name.trim_prefix(f.mod + '.')
+	return '$x = $f.expr'
 }
 
 pub fn (e CompForKind) str() string {
 	match e {
 		.methods { return 'methods' }
 		.fields { return 'fields' }
+		.attributes { return 'attributes' }
 	}
 }

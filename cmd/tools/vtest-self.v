@@ -20,6 +20,7 @@ const (
 		'vlib/orm/orm_test.v',
 		'vlib/sqlite/sqlite_test.v',
 		'vlib/v/tests/orm_sub_struct_test.v',
+		'vlib/v/tests/orm_sub_array_struct_test.v',
 		'vlib/vweb/tests/vweb_test.v',
 		'vlib/vweb/request_test.v',
 		'vlib/vweb/route_test.v',
@@ -56,6 +57,7 @@ const (
 		'vlib/sqlite/sqlite_test.v',
 		'vlib/orm/orm_test.v',
 		'vlib/v/tests/orm_sub_struct_test.v',
+		'vlib/v/tests/orm_sub_array_struct_test.v',
 		'vlib/clipboard/clipboard_test.v',
 		'vlib/vweb/tests/vweb_test.v',
 		'vlib/vweb/request_test.v',
@@ -103,7 +105,7 @@ fn main() {
 	title := 'testing vlib'
 	all_test_files := os.walk_ext(os.join_path(vroot, 'vlib'), '_test.v')
 	testing.eheader(title)
-	mut tsession := testing.new_test_session(cmd_prefix)
+	mut tsession := testing.new_test_session(cmd_prefix, true)
 	tsession.files << all_test_files
 	tsession.skip_files << skip_test_files
 	mut werror := false

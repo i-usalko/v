@@ -43,10 +43,10 @@ pub fn (mut p Parser) call_expr(language ast.Language, mod string) ast.CallExpr 
 		// In case of `foo<T>()`
 		// T is unwrapped and registered in the checker.
 		full_generic_fn_name := if fn_name.contains('.') { fn_name } else { p.prepend_mod(fn_name) }
-		has_generic_generic := concrete_types.filter(it.has_flag(.generic)).len > 0
-		if !has_generic_generic {
+		has_generic := concrete_types.filter(it.has_flag(.generic)).len > 0
+		if !has_generic {
 			// will be added in checker
-			p.table.register_fn_generic_types(full_generic_fn_name, concrete_types)
+			p.table.register_fn_concrete_types(full_generic_fn_name, concrete_types)
 		}
 	}
 	p.check(.lpar)
@@ -174,12 +174,27 @@ mut:
 fn (mut p Parser) fn_decl() ast.FnDecl {
 	p.top_level_statement_start()
 	start_pos := p.tok.position()
-	is_manualfree := p.is_manualfree || p.attrs.contains('manualfree')
-	is_deprecated := p.attrs.contains('deprecated')
-	is_direct_arr := p.attrs.contains('direct_array_access')
+
+	mut is_manualfree := p.is_manualfree
+	mut is_deprecated := false
+	mut is_direct_arr := false
+	mut is_keep_alive := false
+	mut is_exported := false
+	mut is_unsafe := false
+	mut is_trusted := false
+	for fna in p.attrs {
+		match fna.name {
+			'manualfree' { is_manualfree = true }
+			'deprecated' { is_deprecated = true }
+			'direct_array_access' { is_direct_arr = true }
+			'keep_args_alive' { is_keep_alive = true }
+			'export' { is_exported = true }
+			'unsafe' { is_unsafe = true }
+			'trusted' { is_trusted = true }
+			else {}
+		}
+	}
 	conditional_ctdefine := p.attrs.find_comptime_define() or { '' }
-	mut is_unsafe := p.attrs.contains('unsafe')
-	is_keep_alive := p.attrs.contains('keep_args_alive')
 	is_pub := p.tok.kind == .key_pub
 	if is_pub {
 		p.next()
@@ -189,7 +204,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	// C. || JS.
 	mut language := ast.Language.v
 	if p.tok.kind == .name && p.tok.lit == 'C' {
-		is_unsafe = !p.attrs.contains('trusted')
+		is_unsafe = !is_trusted
 		language = ast.Language.c
 	} else if p.tok.kind == .name && p.tok.lit == 'JS' {
 		language = ast.Language.js
@@ -273,12 +288,13 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		}
 	}
 	// <T>
-	generic_names := p.parse_generic_names()
-	// check generic receiver method has no generic names
-	if is_method && rec.typ.has_flag(.generic) && generic_names.len == 0
-		&& p.table.get_type_symbol(rec.typ).kind != .any {
-		p.error_with_pos('generic receiver method `$name` should add generic names, e.g. $name<T>',
-			name_pos)
+	mut generic_names := p.parse_generic_names()
+	// generic names can be infer with receiver's generic names
+	if is_method && rec.typ.has_flag(.generic) && generic_names.len == 0 {
+		sym := p.table.get_type_symbol(rec.typ)
+		if sym.info is ast.Struct {
+			generic_names = sym.info.generic_types.map(p.table.get_type_symbol(it).name)
+		}
 	}
 	// Args
 	args2, are_args_type_only, is_variadic := p.fn_args()
@@ -291,11 +307,16 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 					scope: 0
 				}
 			}
+			mut is_stack_obj := true
+			if param.typ.has_flag(.shared_f) {
+				is_stack_obj = false
+			}
 			p.scope.register(ast.Var{
 				name: param.name
 				typ: param.typ
 				is_mut: param.is_mut
 				is_auto_deref: param.is_mut || param.is_auto_rec
+				is_stack_obj: is_stack_obj
 				pos: param.pos
 				is_used: true
 				is_arg: true
@@ -318,6 +339,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 	short_fn_name := name
 	is_main := short_fn_name == 'main' && p.mod == 'main'
 	is_test := short_fn_name.starts_with('test_') || short_fn_name.starts_with('testsuite_')
+
 	// Register
 	if is_method {
 		mut type_sym := p.table.get_type_symbol(rec.typ)
@@ -416,6 +438,7 @@ fn (mut p Parser) fn_decl() ast.FnDecl {
 		params: params
 		is_manualfree: is_manualfree
 		is_deprecated: is_deprecated
+		is_exported: is_exported
 		is_direct_arr: is_direct_arr
 		is_pub: is_pub
 		is_variadic: is_variadic
@@ -573,12 +596,18 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 		return ast.AnonFn{}
 	}
 	p.open_scope()
-	p.scope.detached_from_parent = true
+	if p.pref.backend != .js {
+		p.scope.detached_from_parent = true
+	}
 	// TODO generics
 	args, _, is_variadic := p.fn_args()
 	for arg in args {
 		if arg.name.len == 0 {
 			p.error_with_pos('use `_` to name an unused parameter', arg.pos)
+		}
+		mut is_stack_obj := true
+		if arg.typ.has_flag(.shared_f) {
+			is_stack_obj = false
 		}
 		p.scope.register(ast.Var{
 			name: arg.name
@@ -587,6 +616,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 			pos: arg.pos
 			is_used: true
 			is_arg: true
+			is_stack_obj: is_stack_obj
 		})
 	}
 	mut same_line := p.tok.line_nr == p.prev_tok.line_nr
@@ -615,7 +645,7 @@ fn (mut p Parser) anon_fn() ast.AnonFn {
 		is_variadic: is_variadic
 		return_type: return_type
 	}
-	name := 'anon_fn_${p.table.fn_type_signature(func)}_$p.tok.pos'
+	name := 'anon_fn_${p.unique_prefix}_${p.table.fn_type_signature(func)}_$p.tok.pos'
 	keep_fn_name := p.cur_fn_name
 	p.cur_fn_name = name
 	if p.tok.kind == .lcbr {
@@ -666,6 +696,8 @@ fn (mut p Parser) fn_args() ([]ast.Param, bool, bool) {
 	types_only := p.tok.kind in [.amp, .ellipsis, .key_fn, .lsbr]
 		|| (p.peek_tok.kind == .comma && p.table.known_type(argname))
 		|| p.peek_tok.kind == .dot || p.peek_tok.kind == .rpar
+		|| (p.tok.kind == .key_mut && (p.peek_token(2).kind == .comma
+		|| p.peek_token(2).kind == .rpar))
 	// TODO copy pasta, merge 2 branches
 	if types_only {
 		mut arg_no := 1

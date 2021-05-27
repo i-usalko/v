@@ -69,7 +69,9 @@ fn (mut g Gen) process_fn_decl(node ast.FnDecl) {
 		}
 	}
 	keep_fn_decl := g.fn_decl
-	g.fn_decl = &node
+	unsafe {
+		g.fn_decl = &node
+	}
 	if node.name == 'main.main' {
 		g.has_main = true
 	}
@@ -93,7 +95,7 @@ fn (mut g Gen) process_fn_decl(node ast.FnDecl) {
 	}
 }
 
-fn (mut g Gen) gen_fn_decl(node ast.FnDecl, skip bool) {
+fn (mut g Gen) gen_fn_decl(node &ast.FnDecl, skip bool) {
 	// TODO For some reason, build fails with autofree with this line
 	// as it's only informative, comment it for now
 	// g.gen_attrs(it.attrs)
@@ -141,11 +143,14 @@ fn (mut g Gen) gen_fn_decl(node ast.FnDecl, skip bool) {
 		g.cur_concrete_types = []
 		return
 	}
-	cur_fn_save := g.cur_fn
+	cur_fn_save := g.table.cur_fn
 	defer {
-		g.cur_fn = cur_fn_save
+		g.table.cur_fn = cur_fn_save
 	}
-	g.cur_fn = node
+	unsafe {
+		// TODO remove unsafe
+		g.table.cur_fn = node
+	}
 	fn_start_pos := g.out.len
 	g.write_v_source_line_info(node.pos)
 	msvc_attrs := g.write_fn_attrs(node.attrs)
@@ -342,6 +347,8 @@ fn (g &Gen) defer_flag_var(stmt &ast.DeferStmt) string {
 }
 
 fn (mut g Gen) write_defer_stmts_when_needed() {
+	// unlock all mutexes, in case we are in a lock statement. defers are not allowed in lock statements
+	g.unlock_locks()
 	if g.defer_stmts.len > 0 {
 		g.write_defer_stmts()
 	}
@@ -369,18 +376,11 @@ fn (mut g Gen) fn_args(args []ast.Param, is_variadic bool) ([]string, []string) 
 		if arg_type_sym.kind == .function {
 			info := arg_type_sym.info as ast.FnType
 			func := info.func
-			if !info.is_anon {
-				g.write(arg_type_name + ' ' + caname)
-				g.definitions.write_string(arg_type_name + ' ' + caname)
-				fargs << caname
-				fargtypes << arg_type_name
-			} else {
-				g.write('${g.typ(func.return_type)} (*$caname)(')
-				g.definitions.write_string('${g.typ(func.return_type)} (*$caname)(')
-				g.fn_args(func.params, func.is_variadic)
-				g.write(')')
-				g.definitions.write_string(')')
-			}
+			g.write('${g.typ(func.return_type)} (*$caname)(')
+			g.definitions.write_string('${g.typ(func.return_type)} (*$caname)(')
+			g.fn_args(func.params, func.is_variadic)
+			g.write(')')
+			g.definitions.write_string(')')
 		} else {
 			s := '$arg_type_name $caname'
 			g.write(s)
@@ -462,7 +462,9 @@ fn (mut g Gen) call_expr(node ast.CallExpr) {
 				g.write('\n $cur_line $tmp_opt /*U*/')
 			} else {
 				if !g.inside_const {
-					g.write('\n $cur_line *($unwrapped_styp*)${tmp_opt}.data')
+					g.write('\n $cur_line (*($unwrapped_styp*)${tmp_opt}.data)')
+				} else {
+					g.write('\n $cur_line $tmp_opt')
 				}
 			}
 		}
@@ -477,7 +479,9 @@ fn (mut g Gen) call_expr(node ast.CallExpr) {
 
 pub fn (mut g Gen) unwrap_generic(typ ast.Type) ast.Type {
 	if typ.has_flag(.generic) {
-		if t_typ := g.table.resolve_generic_to_concrete(typ, g.cur_fn.generic_names, g.cur_concrete_types) {
+		if t_typ := g.table.resolve_generic_to_concrete(typ, g.table.cur_fn.generic_names,
+			g.cur_concrete_types, false)
+		{
 			return t_typ
 		}
 	}
@@ -753,7 +757,13 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 	// TODO: test node.left instead
 	// left & left_type will be `x` and `x type` in `x.fieldfn()`
 	// will be `0` for `foo()`
+	mut is_interface_call := false
 	if node.left_type != 0 {
+		left_sym := g.table.get_type_symbol(node.left_type)
+		if left_sym.kind == .interface_ {
+			is_interface_call = true
+			g.write('(*')
+		}
 		g.expr(node.left)
 		if node.left_type.is_ptr() {
 			g.write('->')
@@ -819,8 +829,8 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 	}
 	if node.language == .c {
 		// Skip "C."
-		g.is_c_call = true
 		name = util.no_dots(name[2..])
+		g.is_c_call = true
 	} else {
 		name = c_name(name)
 	}
@@ -885,8 +895,12 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 			// g.writeln(';')
 			// g.write(cur_line + ' /* <== af cur line*/')
 			// }
+			g.write(g.get_ternary_name(name))
+			if is_interface_call {
+				g.write(')')
+			}
 			mut tmp_cnt_save := -1
-			g.write('${g.get_ternary_name(name)}(')
+			g.write('(')
 			if g.is_json_fn {
 				g.write(json_obj)
 			} else {
@@ -1126,7 +1140,7 @@ fn (mut g Gen) call_args(node ast.CallExpr) {
 				}
 				g.write('}))')
 			} else {
-				g.write('__new_array_with_default(0, 0, sizeof($elem_type), 0)')
+				g.write('__new_array(0, 0, sizeof($elem_type))')
 			}
 		}
 	}
